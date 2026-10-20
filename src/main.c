@@ -22,6 +22,7 @@ void sh_exit(int status)
         const char *hf = var_get("HISTFILE");
         if (hf && *hf) hist_save(hf);
     }
+    os_console_detach();
     os_cleanup();
     exit(status);
 }
@@ -215,6 +216,7 @@ int main(int argc, char **argv)
     char cwd[512];
 
     os_init();
+    if (os_wb_launch()) return 0;      /* Workbench: opened a Bash window */
     io_init();
     memset(&sh, 0, sizeof(sh));
     sh.opt_braceexpand = 1;
@@ -427,6 +429,7 @@ int main(int argc, char **argv)
             }
         }
     }
+    if (sh.interactive) os_console_attach();   /* window title "Bash" */
     status = sh_repl(sh_fd(0), sh.interactive);
     sh_exit(status);
     return status;

@@ -39,6 +39,7 @@ fork-dependent features are emulated:
 ## Installing
 
 1. Copy `bash` (68000 build) or `bash020` (68020+, renamed to `bash`) to `C:`.
+   For Workbench, copy `bash` and `bash.info` to a drawer (e.g. `SYS:Utilities`).
 2. Optionally copy `S/bashrc` to `S:bashrc` (system-wide startup file).
 3. In a Shell window type `bash`. To make it the default for new Shell
    windows, put `bash` as the last line of `S:Shell-Startup`.
@@ -101,7 +102,7 @@ scripts see them (`$name` in AmigaDOS, `GetVar()`).
   history jobs kill let local logout mapfile popd printf pushd pwd read
   readarray readonly return set sh shift shopt source test times trap true
   type typeset ulimit umask unalias unset wait which [ : . ados`,
-  plus Amiga console helpers `palette`, `setfont` and `showkey`.
+  plus Amiga helpers `bashwin`, `palette`, `setfont` and `showkey`.
 * **Utilities built in** (so a bare Amiga gets the usual Unix tools): `ls cat
   cp mv rm mkdir rmdir touch chmod find du df stat realpath head tail wc grep
   egrep fgrep sort uniq cut tr sed tee seq rev nl paste tac basename dirname
@@ -117,6 +118,27 @@ scripts see them (`$name` in AmigaDOS, `GetVar()`).
   `$variables`, volumes and assigns (`Wo<Tab>` → `Work:`), double-Tab lists.
   Ctrl-C interrupts loops and commands. The prompt understands `\u \h \w \W \$
   \t \d \D{fmt} \[ \]` and ANSI colours.
+
+## Windows ("tabs") and Workbench
+
+The Amiga console has no tabs, so AmiBash uses the native Amiga way:
+several windows, with shortcuts.
+
+| Key / command | Action |
+|---|---|
+| **F1** or `bashwin` | open another Bash window ("Bash 2", "Bash 3", …) |
+| **F2** or `bashwin -n` | bring the next Bash window to the front and activate it |
+| `exit`, Ctrl-D or the close gadget | close the shell; its window closes if bash opened it |
+
+* **Workbench:** put `bash.info` (supplied) next to `bash` and double-click it.
+  Bash opens its own window titled "Bash" in the icon's drawer, and `exit`
+  closes the window. Change the window with the icon's tool type
+  `WINDOW=CON:x/y/w/h/Bash/CLOSE`. Avoid Workbench's *Execute Command*: its
+  "Output window" waits for you to close it after any program ends.
+* **Shell window:** typing `bash` runs inside that Shell window. The window
+  is retitled "Bash" while it runs, and `exit` returns to the Shell prompt,
+  as bash in a terminal does. To make bash the default, add `bash` at the end
+  of `S:Shell-Startup`, or use `NewShell` and then `bash`.
 
 ## Line editing, colours and fonts
 

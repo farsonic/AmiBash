@@ -666,7 +666,7 @@ static int getkey(void)
 
 /* key codes beyond bytes */
 enum { K_UP = 1000, K_DOWN, K_LEFT, K_RIGHT, K_HOME, K_END, K_DEL, K_WLEFT, K_WRIGHT,
-       K_HELP, K_IGNORE, K_SUP, K_SDOWN };
+       K_HELP, K_IGNORE, K_SUP, K_SDOWN, K_F1, K_F2 };
 
 static int read_seq(int intro)
 {
@@ -684,6 +684,8 @@ static int read_seq(int intro)
     if (intro == 'O') {
         switch (seq[0]) {
         case 'H': return K_HOME;
+        case 'P': return K_F1;
+        case 'Q': return K_F2;
         case 'F': return K_END;
         case 'A': return K_UP;
         case 'B': return K_DOWN;
@@ -705,6 +707,10 @@ static int read_seq(int intro)
         }
         return K_IGNORE;
     }
+    if (intro == 0x9b && strcmp(seq, "0~") == 0) return K_F1;   /* Amiga F1 */
+    if (intro == 0x9b && strcmp(seq, "1~") == 0) return K_F2;   /* Amiga F2 */
+    if (strcmp(seq, "11~") == 0 || strcmp(seq, "OP") == 0) return K_F1;  /* ANSI F1 */
+    if (strcmp(seq, "12~") == 0 || strcmp(seq, "OQ") == 0) return K_F2;
     if (strcmp(seq, " A") == 0) return K_HOME;      /* Amiga shift-left */
     if (strcmp(seq, " @") == 0) return K_END;       /* Amiga shift-right */
     if (strcmp(seq, "?~") == 0) return K_HELP;
@@ -1150,6 +1156,12 @@ char *le_readline(const char *prompt)
             /* Help key: show help */
             break;
         }
+        case K_F1:       /* new Bash window */
+            os_new_shell_window();
+            continue;
+        case K_F2:       /* next Bash window */
+            os_next_shell_window();
+            continue;
         case K_IGNORE:
             continue;
         default:

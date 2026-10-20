@@ -2693,6 +2693,27 @@ static int bi_palette(int argc, char **argv)
     return 0;
 }
 
+/* bashwin: open another Bash window; bashwin -n: go to the next one */
+static int bi_bashwin(int argc, char **argv)
+{
+    if (argc > 1 && strcmp(argv[1], "-n") == 0) {
+        if (os_next_shell_window() != 0) {
+            sh_cmd_error("bashwin", "no other Bash window");
+            return 1;
+        }
+        return 0;
+    }
+    if (argc > 1) {
+        sh_puts(2, "bashwin: usage: bashwin [-n]   (new window / next window)\n");
+        return 2;
+    }
+    if (os_new_shell_window() != 0) {
+        sh_cmd_error("bashwin", "%s", os_errstr());
+        return 1;
+    }
+    return 0;
+}
+
 static int bi_logout(int argc, char **argv)
 {
     return bi_exit(argc, argv);
@@ -2706,6 +2727,7 @@ const Builtin shell_builtins[] = {
     {"[", bi_test, 0, "[ arg... ]  - evaluate conditional expression"},
     {"ados", bi_ados, 0, "ados command-line  - run a command line through the AmigaDOS shell"},
     {"alias", bi_alias, 0, "alias [-p] [name[=value] ... ]"},
+    {"bashwin", bi_bashwin, 0, "bashwin [-n]  - open a new Bash window (F1); -n: next window (F2)"},
     {"bg", bi_fg, 0, "bg [job_spec]  - not supported (no job control)"},
     {"bash", run_child_shell, 0, "bash [-ceux] [-c command | script] [args]  - run a child shell (in-process)"},
     {"break", bi_break, BI_SPECIAL, "break [n]"},

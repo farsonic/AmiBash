@@ -128,6 +128,13 @@ int   os_console_pens(void);                            /* number of colours */
 int   os_console_getpen(int pen, unsigned long *rgb);   /* rgb = 0xRRGGBB */
 int   os_console_setpen(int pen, unsigned long rgb);
 
+/* Bash windows (Amiga): started from Workbench -> open an own window */
+int   os_wb_launch(void);              /* 1 = launched a window, exit now */
+int   os_new_shell_window(void);       /* open another Bash window (0 ok) */
+int   os_next_shell_window(void);      /* bring the next Bash window to front */
+void  os_console_attach(void);         /* interactive: title + register   */
+void  os_console_detach(void);
+
 void  os_init(void);
 void  os_cleanup(void);
 

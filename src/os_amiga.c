@@ -25,6 +25,10 @@
 #include <graphics/view.h>
 #include <proto/graphics.h>
 #include <proto/diskfont.h>
+#include <proto/intuition.h>
+#include <workbench/startup.h>
+#include <workbench/workbench.h>
+#include <proto/icon.h>
 #include <diskfont/diskfont.h>
 #include <devices/conunit.h>
 #include <exec/io.h>
@@ -1248,5 +1252,189 @@ int os_console_setpen(int pen, unsigned long rgb)
     else
         SetRGB4(&s->ViewPort, pen, (rgb >> 20) & 15, (rgb >> 12) & 15, (rgb >> 4) & 15);
     return 0;
+}
+#endif
+
+#ifdef AMIGA
+/* ------------------------------------------------------------------ */
+/* Bash windows                                                         */
+
+extern struct WBStartup *_WBenchMsg;
+struct IntuitionBase *IntuitionBase;
+
+static int open_intuition(void)
+{
+    if (!IntuitionBase) IntuitionBase = (struct IntuitionBase *)OpenLibrary((STRPTR)"intuition.library", 36);
+    return IntuitionBase != NULL;
+}
+
+/* every interactive bash registers a public port so that windows can be
+ * counted and cycled through */
+typedef struct BashPort {
+    struct MsgPort mp;
+    struct Window *win;
+    int num;
+} BashPort;
+
+static BashPort *myport;
+static char oldtitle_buf[1];
+static UBYTE *oldtitle;
+static char mytitle[32];
+static char selfpath[256];
+
+static void find_self(void)
+{
+    char name[108];
+    BPTR dir = 0;
+    if (selfpath[0]) return;
+    if (_WBenchMsg && _WBenchMsg->sm_NumArgs > 0) {
+        dir = _WBenchMsg->sm_ArgList[0].wa_Lock;
+        strncpy(name, (char *)_WBenchMsg->sm_ArgList[0].wa_Name, sizeof(name) - 1);
+        name[sizeof(name) - 1] = 0;
+    } else {
+        dir = GetProgramDir();
+        if (!GetProgramName((STRPTR)name, sizeof(name))) strcpy(name, "bash");
+    }
+    if (dir && NameFromLock(dir, (STRPTR)selfpath, sizeof(selfpath))) {
+        AddPart((STRPTR)selfpath, FilePart((STRPTR)name), sizeof(selfpath));
+    } else {
+        strcpy(selfpath, "C:bash");
+    }
+}
+
+static int count_bash_windows(int *maxnum)
+{
+    struct Node *n;
+    int cnt = 0;
+    *maxnum = 0;
+    Forbid();
+    for (n = SysBase->PortList.lh_Head; n->ln_Succ; n = n->ln_Succ) {
+        if (n->ln_Name && strcmp(n->ln_Name, "AmiBash") == 0) {
+            cnt++;
+            if (((BashPort *)n)->num > *maxnum) *maxnum = ((BashPort *)n)->num;
+        }
+    }
+    Permit();
+    return cnt;
+}
+
+static char winspec_tt[160];     /* WINDOW tool type from our icon */
+
+int os_new_shell_window(void)
+{
+    struct Screen *scr;
+    char spec[160], cmd[300];
+    int w = 640, h = 200, top = 11, maxnum, n;
+    BPTR in;
+    LONG r;
+    find_self();
+    count_bash_windows(&maxnum);
+    n = maxnum;                         /* stagger new windows */
+    if (open_intuition() && (scr = LockPubScreen(NULL)) != NULL) {
+        top = scr->BarHeight + 1;
+        w = scr->Width;
+        h = (scr->Height - top) * 3 / 4;
+        UnlockPubScreen(NULL, scr);
+    }
+    if (winspec_tt[0] && n == 0) strcpy(spec, winspec_tt);
+    else sprintf(spec, "CON:%d/%d/%d/%d/Bash/CLOSE", (n % 6) * 16, top + (n % 6) * 12, w - 96, h);
+    in = Open((STRPTR)spec, MODE_NEWFILE);
+    if (!in) {
+        last_err = IoErr();
+        return -1;
+    }
+    sprintf(cmd, "\"%s\" -i", selfpath);
+    r = SystemTags((STRPTR)cmd, SYS_Input, in, SYS_Output, NULL, SYS_Asynch, TRUE,
+                   SYS_UserShell, TRUE, NP_StackSize, 65536, TAG_END);
+    if (r == -1) {
+        last_err = IoErr();
+        Close(in);
+        return -1;
+    }
+    return 0;
+}
+
+int os_wb_launch(void)
+{
+    struct Library *IconBase;
+    if (!_WBenchMsg) return 0;
+    /* tool type WINDOW=CON:... in the icon overrides the window */
+    IconBase = OpenLibrary((STRPTR)"icon.library", 36);
+    if (IconBase && _WBenchMsg->sm_NumArgs > 0) {
+        BPTR old = CurrentDir(_WBenchMsg->sm_ArgList[0].wa_Lock);
+        struct DiskObject *d = GetDiskObject(_WBenchMsg->sm_ArgList[0].wa_Name);
+        if (d) {
+            STRPTR v = FindToolType(d->do_ToolTypes, (STRPTR)"WINDOW");
+            if (v && strlen((char *)v) < sizeof(winspec_tt)) strcpy(winspec_tt, (char *)v);
+            FreeDiskObject(d);
+        }
+        CurrentDir(old);
+    }
+    if (IconBase) CloseLibrary(IconBase);
+    /* started from Workbench: run in an own "Bash" window as a proper CLI
+     * process; the window closes when that shell exits */
+    os_new_shell_window();
+    return 1;
+}
+
+void os_console_attach(void)
+{
+    struct Window *w = console_window();
+    int maxnum;
+    if (!w || !open_intuition() || myport) return;
+    count_bash_windows(&maxnum);
+    myport = AllocVec(sizeof(BashPort), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!myport) return;
+    myport->mp.mp_Node.ln_Name = (char *)"AmiBash";
+    myport->mp.mp_Node.ln_Type = NT_MSGPORT;
+    myport->mp.mp_Flags = PA_IGNORE;
+    NewList(&myport->mp.mp_MsgList);
+    myport->win = w;
+    myport->num = maxnum + 1;
+    AddPort(&myport->mp);
+    oldtitle = w->Title;
+    if (myport->num == 1) strcpy(mytitle, "Bash");
+    else sprintf(mytitle, "Bash %d", myport->num);
+    SetWindowTitles(w, (UBYTE *)mytitle, (UBYTE *)~0);
+    (void)oldtitle_buf;
+}
+
+void os_console_detach(void)
+{
+    if (!myport) return;
+    RemPort(&myport->mp);
+    if (myport->win && open_intuition()) SetWindowTitles(myport->win, oldtitle, (UBYTE *)~0);
+    FreeVec(myport);
+    myport = NULL;
+}
+
+int os_next_shell_window(void)
+{
+    struct Node *n;
+    struct Window *wins[32], *next = NULL;
+    int nums[32], cnt = 0, i, best = -1;
+    int mynum = myport ? myport->num : 0;
+    if (!open_intuition()) return -1;
+    Forbid();
+    for (n = SysBase->PortList.lh_Head; n->ln_Succ && cnt < 32; n = n->ln_Succ) {
+        if (n->ln_Name && strcmp(n->ln_Name, "AmiBash") == 0) {
+            wins[cnt] = ((BashPort *)n)->win;
+            nums[cnt] = ((BashPort *)n)->num;
+            cnt++;
+        }
+    }
+    /* next higher number, wrapping round to the lowest */
+    for (i = 0; i < cnt; i++)
+        if (nums[i] > mynum && (best < 0 || nums[i] < nums[best])) best = i;
+    if (best < 0)
+        for (i = 0; i < cnt; i++)
+            if (best < 0 || nums[i] < nums[best]) best = i;
+    if (best >= 0 && nums[best] != mynum) next = wins[best];
+    if (next) {
+        WindowToFront(next);
+        ActivateWindow(next);
+    }
+    Permit();
+    return next ? 0 : -1;
 }
 #endif
