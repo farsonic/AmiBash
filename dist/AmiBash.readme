@@ -2,7 +2,7 @@ Short:        Bash-compatible shell for AmigaOS (no ixemul)
 Author:       AmiBash contributors
 Uploader:     farsonic@gmail.com
 Type:         util/shell
-Version:      0.9
+Version:      0.9.3
 Architecture: m68k-amigaos >= 2.0.4; m68k-aros
 Distribution: Aminet
 License:      GPL-3.0-or-later
@@ -17,12 +17,19 @@ Amiga paths (DH0:Work/x) and Unix-style paths (/dh0/Work/x) both work; "/"
 lists all volumes and assigns.  Amiga commands run directly with correct
 ReadArgs() quoting, Ctrl-C works, return codes become $?.
 
+Double-click it on Workbench (or type "bash --term") for the AmiBash
+Terminal: a window with tabs, each running its own bash.  Amiga-T or the
+"+" opens a tab, Amiga-W or a tab's "x" closes it, Amiga-1..9 switches.
+The program is pure (re-entrant), so the tabs share one copy of the code,
+and it can be made resident.
+
 Its behaviour is checked against GNU bash 5.2 with a test corpus, and it
 runs on 68000 with 1 MB (bash) or 68020+ (bash020).
 
 Install:  Copy bash TO C:        (or bash020 AS C:bash on 68020+)
           Copy S/bashrc TO S:    (optional)
-          then type "bash" in a Shell window.
+          then type "bash" in a Shell window, or "bash --term"
+          (Workbench: copy bash and bash.info to a drawer).
 
 See README.md for details, the list of differences from GNU bash and
 build instructions (vbcc, NDK 3.2).

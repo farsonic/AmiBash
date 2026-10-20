@@ -11,8 +11,47 @@ static void oom(void)
 {
     static const char msg[] = "bash: out of memory\n";
     os_write(os_stderr(), msg, sizeof(msg) - 1);
-    exit(20);
+    os_exit(20);
 }
+
+#ifdef AMIBASH_PURE
+/* The resident build has no C library heap: memory comes from AllocVec()
+ * and every block is listed, so that all of it is freed when the shell
+ * exits (the code may stay loaded and run again). */
+#include <exec/memory.h>
+#include <proto/exec.h>
+
+typedef struct SysBlk { struct SysBlk *next, *prev; } SysBlk;
+static SysBlk *sysblks;
+
+static void *sys_alloc(size_t n)
+{
+    SysBlk *b = AllocVec(sizeof(SysBlk) + n, MEMF_ANY);
+    if (!b) return NULL;
+    b->prev = NULL;
+    b->next = sysblks;
+    if (sysblks) sysblks->prev = b;
+    sysblks = b;
+    return b + 1;
+}
+
+static void sys_free(void *p)
+{
+    SysBlk *b = (SysBlk *)p - 1;
+    if (b->prev) b->prev->next = b->next;
+    else sysblks = b->next;
+    if (b->next) b->next->prev = b->prev;
+    FreeVec(b);
+}
+
+void os_free_all(void)
+{
+    while (sysblks) sys_free(sysblks + 1);
+}
+#else
+#define sys_alloc(n) malloc(n)
+#define sys_free(p) free(p)
+#endif
 
 #if defined(AMIGA) || defined(SH_POOL)
 /*
@@ -57,7 +96,7 @@ void *xmalloc(size_t n)
     if (!cls_ready) cls_init();
     if (n == 0) n = 1;
     if (n > 4096) {
-        b = malloc(sizeof(BlkHdr) + n);
+        b = sys_alloc(sizeof(BlkHdr) + n);
         if (!b) oom();
         b->h.cls = BIGCLASS;
         b->h.size = n;
@@ -74,7 +113,7 @@ void *xmalloc(size_t n)
         size_t need = sizeof(BlkHdr) + cls_size[c];
         if (chunk_left < need) {
             /* the tail of the old chunk is simply abandoned (< 4 KB) */
-            chunk_ptr = malloc(POOL_CHUNK);
+            chunk_ptr = sys_alloc(POOL_CHUNK);
             if (!chunk_ptr) oom();
             chunk_left = POOL_CHUNK;
         }
@@ -93,7 +132,7 @@ void xfree(void *p)
     if (!p) return;
     b = (BlkHdr *)p - 1;
     if (b->h.cls == BIGCLASS) {
-        free(b);
+        sys_free(b);
         return;
     }
     ((FreeBlk *)p)->next = freelist[b->h.cls];

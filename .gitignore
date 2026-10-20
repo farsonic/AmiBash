@@ -4,3 +4,6 @@ emu/dh0/*.txt
 emu/dh0/T/
 dist/AmiBash.lha
 *.o
+emu/dh0/*.uaem
+emu/dh0/term.log
+dist/*.zip

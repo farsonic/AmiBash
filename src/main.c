@@ -6,10 +6,14 @@
 #include <ctype.h>
 #include "sh.h"
 
-#ifdef AMIGA
+#ifdef AMIBASH_PURE
+#define main sh_main        /* the start-up code is in pure_amiga.c */
+#elif defined(AMIGA)
 /* the shell recurses (parser, expansion, functions): ask for a big stack */
 size_t __stack = 65536;     /* use the Stack command to raise it */
-static const char ver[] = "$VER: bash " AMIBASH_SHORTVER " (20.10.2026) AmiBash - bash for AmigaOS";
+#endif
+#ifdef AMIGA
+static const char ver[] = "$VER: bash " AMIBASH_SHORTVER " (" AMIBASH_DATE ") AmiBash " AMIBASH_BUILD " build";
 #endif
 
 Shell sh;
@@ -24,7 +28,7 @@ void sh_exit(int status)
     }
     os_console_detach();
     os_cleanup();
-    exit(status);
+    os_exit(status);
 }
 
 const char *sh_basename_cmd(void)
@@ -37,7 +41,14 @@ const char *sh_basename_cmd(void)
 static int read_line(ShFile *in, SBuf *line, const char *ps, int interactive)
 {
     if (interactive && in->kind == SHF_OS && in->tty) {
-        char *prompt = prompt_expand(ps);
+        char *prompt;
+        if (var_get("AMIBASH_TERM") && ps == var_get("PS1")) {
+            /* tab title in the AmiBash Terminal (xterm title sequence) */
+            char *t = prompt_expand("bash: \\w");
+            sh_printf(1, "\033]0;%s\007", t);
+            xfree(t);
+        }
+        prompt = prompt_expand(ps);
         char *l = le_readline(prompt);
         xfree(prompt);
         if (!l) return 0;
@@ -58,7 +69,7 @@ static int read_line(ShFile *in, SBuf *line, const char *ps, int interactive)
 int sh_repl(ShFile *in, int interactive)
 {
     SBuf buf, line;
-    int status = 0, lineno = 1;
+    int lineno = 1;
     sb_init(&buf);
     sb_init(&line);
     for (;;) {
@@ -148,7 +159,6 @@ int sh_repl(ShFile *in, int interactive)
                 sh.lineno = parser_lineno(p);
                 if (r == PARSE_INCOMPLETE) sh_error("syntax error: unexpected end of file");
                 else report_syntax_error(p, NULL);
-                status = 2;
                 sh.laststatus = 2;
                 if (!interactive) {
                     parser_free(p);
@@ -160,7 +170,7 @@ int sh_repl(ShFile *in, int interactive)
                 break;
             }
             if (n) {
-                status = exec_node(n);
+                exec_node(n);
                 sh_flush_all();
                 if (sh.flow == FLOW_EXIT) {
                     parser_free(p);
@@ -264,8 +274,8 @@ int main(int argc, char **argv)
             sh_exit(sh_run_selftest());
         }
         if (strcmp(a, "--version") == 0) {
-            sh_printf(1, "GNU bash compatible AmiBash, version %s\n", AMIBASH_VERSION);
-            sh_puts(1, "AmiBash: a bash-compatible shell for AmigaOS (no ixemul needed).\n");
+            sh_printf(1, "AmiBash %s (%s build, %s), GNU bash %s compatible\n", AMIBASH_SHORTVER, AMIBASH_BUILD, AMIBASH_DATE, AMIBASH_VERSION);
+            sh_puts(1, "A bash-compatible shell for AmigaOS (no ixemul needed).  License GPLv3+\n");
             sh_flush_all();
             return 0;
         }
@@ -273,6 +283,18 @@ int main(int argc, char **argv)
             usage();
             sh_flush_all();
             return 0;
+        }
+#ifdef AMIGA
+        if (strcmp(a, "--term") == 0) {
+            /* open the tabbed AmiBash Terminal */
+            extern const char *os_self_path(void);
+            return term_main(os_self_path());
+        }
+#endif
+        if (strcmp(a, "--amiterm") == 0) {
+            /* running in a tab of the AmiBash Terminal */
+            var_set("AMIBASH_TERM", "1", V_EXPORT);
+            continue;
         }
         if (strcmp(a, "--norc") == 0) {
             norc = 1;

@@ -280,7 +280,7 @@ static const char *special_value(Var *v)
     strncpy(buf, s, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = 0;
     xfree(s);
-    return buf;
+    return NEARP(buf);
 }
 
 const char *var_get(const char *name)
@@ -1111,6 +1111,7 @@ void vars_init(void)
     if (!var_get("SHELL")) var_set("SHELL", "/bin/bash", 0);
     var_set("BASH", "/bin/bash", 0);
     var_set("BASH_VERSION", AMIBASH_VERSION, 0);
+    var_set("AMIBASH_VERSION", AMIBASH_SHORTVER " (" AMIBASH_BUILD " build)", 0);
     var_make_array("BASH_VERSINFO", 0);
     var_arr_set("BASH_VERSINFO", "0", "5");
     var_arr_set("BASH_VERSINFO", "1", "2");

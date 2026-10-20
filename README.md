@@ -45,9 +45,9 @@ fork-dependent features are emulated:
    windows, put `bash` as the last line of `S:Shell-Startup`.
 
 Requirements: AmigaOS 2.04 (V37) or newer, or AROS m68k. A 68000 with 1 MB
-works (tested on an emulated A500). The executable is about 350 KB. The
-shell asks for a 64 KB stack; for very deep recursion use e.g.
-`Stack 200000` before starting it.
+works (tested on an emulated A500). The executable is about 400 KB and
+pure, so it can be made resident (`Resident C:bash PURE`). The shell gives
+itself a 64 KB stack whatever the `Stack` setting.
 
 ## Paths
 
@@ -119,26 +119,51 @@ scripts see them (`$name` in AmigaDOS, `GetVar()`).
   Ctrl-C interrupts loops and commands. The prompt understands `\u \h \w \W \$
   \t \d \D{fmt} \[ \]` and ANSI colours.
 
-## Windows ("tabs") and Workbench
+## The AmiBash Terminal (tabs) and Workbench
 
-The Amiga console has no tabs, so AmiBash uses the native Amiga way:
-several windows, with shortcuts.
+The Amiga console has no tabs, so AmiBash brings its own terminal window: a
+tab bar like macOS Terminal's, each tab running its own bash.
 
-| Key / command | Action |
+```
+ x        bash: Work:        A1 | x       bash: RAM:        A2 | +
+```
+
+Double-click `bash` on Workbench, or type `bash --term` in a Shell, to open
+it.
+
+| Key / mouse / command | Action |
 |---|---|
-| **F1** or `bashwin` | open another Bash window ("Bash 2", "Bash 3", …) |
-| **F2** or `bashwin -n` | bring the next Bash window to the front and activate it |
-| `exit`, Ctrl-D or the close gadget | close the shell; its window closes if bash opened it |
+| **Amiga-T**, click **+**, or `bashwin` | new tab |
+| **Amiga-W**, click a tab's **x**, or `exit` / Ctrl-D | close the tab (the last one closes the window) |
+| **Amiga-1** … **Amiga-9**, or click a tab | go to that tab |
+| **Amiga-[** / **Amiga-]**, or `bashwin -n` | previous / next tab |
+| **Amiga-Q** or the close gadget | close all tabs and the window |
+
+The shortcuts work with either Amiga key and are also in the *Terminal*
+menu. A tab's title (and the window's) follows its current directory. The
+terminal understands the ANSI/xterm sequences bash and its tools use:
+colours, cursor movement, erasing, and window titles (`ESC ] 0 ; title BEL`).
+Inside it, `$TERM_PROGRAM` is `AmiBash`.
+
+The binaries are *pure* (re-entrant): every tab runs the code that is already
+loaded, so a tab only costs its own data, stack and heap (well under 100 KB),
+not another copy of the 400 KB program. For the same reason `bash` can be
+made resident: `Resident C:bash PURE`. (A 1 MB Amiga has room for one tab;
+2 MB runs several.)
 
 * **Workbench:** put `bash.info` (supplied) next to `bash` and double-click it.
-  Bash opens its own window titled "Bash" in the icon's drawer, and `exit`
-  closes the window. Change the window with the icon's tool type
-  `WINDOW=CON:x/y/w/h/Bash/CLOSE`. Avoid Workbench's *Execute Command*: its
-  "Output window" waits for you to close it after any program ends.
-* **Shell window:** typing `bash` runs inside that Shell window. The window
-  is retitled "Bash" while it runs, and `exit` returns to the Shell prompt,
-  as bash in a terminal does. To make bash the default, add `bash` at the end
-  of `S:Shell-Startup`, or use `NewShell` and then `bash`.
+  To get a plain console window instead of the terminal, enable the icon's
+  tool type `WINDOW=CON:x/y/w/h/Bash/CLOSE` (remove the brackets). Avoid
+  Workbench's *Execute Command*: its "Output window" waits for you to close
+  it after any program ends.
+* **Shell window:** typing `bash` runs inside that Shell window, which is
+  retitled "Bash" while it runs; `exit` returns to the Shell prompt, as bash
+  in a terminal does. There, **F1** or `bashwin` opens another Bash console
+  window and **F2** or `bashwin -n` brings the next one to the front. To make
+  bash the default, add `bash` at the end of `S:Shell-Startup`.
+* `uname -a` names the build, e.g. `AmigaOS amiga 3.2 AmiBash 0.9.3 (68020
+  build) 21.10.2026 m68k 68030 Amiga AmigaOS`: Kickstart release, AmiBash
+  version and build, CPU. `bash --version` and `$BASH_VERSION` too.
 
 ## Line editing, colours and fonts
 
@@ -193,7 +218,9 @@ You need [vbcc](http://sun.hasenbraten.de/vbcc/) with the m68k-amigaos target,
 vasm, vlink, and the AmigaOS NDK 3.2 headers (Aminet `dev/misc/NDK3.2`).
 
 ```
-make amiga        # build/bash      (68000)
+make pure         # build/bash.pure     (68000, re-entrant: the released bash)
+make pure020      # build/bash020.pure  (68020+, re-entrant)
+make amiga        # build/bash      (68000, ordinary C start-up)
 make amiga020     # build/bash020   (68020+)
 make              # build/amibash   Linux build of the same code, for testing
 make test         # compare against GNU bash on the test corpus

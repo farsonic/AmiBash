@@ -29,7 +29,9 @@ for plane in range(2):
         data += int(bits, 2).to_bytes(words * 2, 'big')
 
 gadget = struct.pack('>IhhhhHHHIIIIIHI', 0, 0, 0, W, H + 1, 5, 3, 1, 1, 0, 0, 0, 0, 0, 1)
-tooltypes = [b'WINDOW=CON:0/12/640/220/Bash/CLOSE']
+# the tabbed terminal opens by default; remove the brackets to use a
+# plain console window instead
+tooltypes = [b'(WINDOW=CON:0/12/640/220/Bash/CLOSE)']
 do = struct.pack('>HH', 0xE310, 1) + gadget + struct.pack('>BBIIiiIIi', 3, 0, 0, 1, -0x80000000, -0x80000000, 0, 0, 65536)
 image = struct.pack('>hhhhhIBBI', 0, 0, W, H, 2, 1, 3, 0, 0)
 tt = struct.pack('>I', (len(tooltypes) + 1) * 4) + b''.join(struct.pack('>I', len(t) + 1) + t + b'\0' for t in tooltypes)

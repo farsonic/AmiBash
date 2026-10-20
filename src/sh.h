@@ -14,7 +14,20 @@
 #include "os.h"
 
 #define AMIBASH_VERSION "5.2.0(1)-amiga"
-#define AMIBASH_SHORTVER "0.9"
+#define AMIBASH_SHORTVER "0.9.3"
+#define AMIBASH_DATE "21.10.2026"
+#define AMIBASH_STR2(x) #x
+#define AMIBASH_STR(x) AMIBASH_STR2(x)
+#ifdef AMIBASH_CPU
+#define AMIBASH_BUILD AMIBASH_STR(AMIBASH_CPU)
+#endif
+#ifndef AMIBASH_BUILD
+#ifdef AMIGA
+#define AMIBASH_BUILD "68000"
+#else
+#define AMIBASH_BUILD "host"
+#endif
+#endif
 
 typedef long long ShInt;              /* arithmetic type (bash: intmax_t) */
 
@@ -499,6 +512,10 @@ int   run_trap(int sig);
 int   exec_subshell_node(Node *n);
 int   run_child_shell(int argc, char **argv);   /* "bash ..." in-process */
 int   sh_repl(ShFile *in, int interactive);
+#ifdef AMIGA
+int   term_main(const char *selfpath);   /* term_amiga.c: tabbed terminal */
+int   term_request(const char *cmd);     /* "new"/"next"/"prev" to it     */
+#endif
 extern Arena *exec_arena;          /* arena of the tree being run      */
 int   os_stack_ok(void);
 
@@ -587,6 +604,20 @@ typedef struct Shell {
 } Shell;
 
 extern Shell sh;
+
+/* The resident ("pure") Amiga build addresses its data through a4, and
+ * vbcc emits an absolute address whenever the address of a data object
+ * lands in a data register or in memory.  NEARP() forces it through an
+ * address register (lea x(a4),a0) instead.  Tables refer to Shell
+ * fields by offset for the same reason. */
+#if defined(AMIGA) && defined(AMIBASH_PURE)
+static void *sh_nearp(__reg("a0") void *p) = "\tmove.l\ta0,d0";
+#define NEARP(x) sh_nearp((void *)(x))
+#else
+#define NEARP(x) ((void *)(x))
+#endif
+#define SHOFF(f) ((int)offsetof(Shell, f))
+#define SHOPT(off) ((int *)((char *)NEARP(&sh) + (off)))
 
 void  sh_set_status(int st);
 void  sh_exit(int status);        /* run EXIT trap, save history, exit   */

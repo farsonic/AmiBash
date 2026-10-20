@@ -177,20 +177,20 @@ int test_binary(const char *a, const char *op, const char *b)
 
 static int option_set(const char *name)
 {
-    static const struct { const char *n; int *p; } opts[] = {
-        {"errexit", &sh.opt_errexit}, {"nounset", &sh.opt_nounset},
-        {"xtrace", &sh.opt_xtrace}, {"verbose", &sh.opt_verbose},
-        {"noglob", &sh.opt_noglob}, {"noclobber", &sh.opt_noclobber},
-        {"allexport", &sh.opt_allexport}, {"pipefail", &sh.opt_pipefail},
-        {"noexec", &sh.opt_noexec}, {"monitor", &sh.opt_monitor},
-        {"emacs", &sh.opt_emacs}, {"vi", &sh.opt_vi}, {"hashall", &sh.opt_hashall},
-        {"ignoreeof", &sh.opt_ignoreeof}, {"braceexpand", &sh.opt_braceexpand},
-        {"histexpand", &sh.opt_histexpand}, {"history", &sh.opt_history},
-        {"posix", &sh.opt_posix}, {NULL, NULL}
+    static const struct { const char *n; int off; } opts[] = {
+        {"errexit", SHOFF(opt_errexit)}, {"nounset", SHOFF(opt_nounset)},
+        {"xtrace", SHOFF(opt_xtrace)}, {"verbose", SHOFF(opt_verbose)},
+        {"noglob", SHOFF(opt_noglob)}, {"noclobber", SHOFF(opt_noclobber)},
+        {"allexport", SHOFF(opt_allexport)}, {"pipefail", SHOFF(opt_pipefail)},
+        {"noexec", SHOFF(opt_noexec)}, {"monitor", SHOFF(opt_monitor)},
+        {"emacs", SHOFF(opt_emacs)}, {"vi", SHOFF(opt_vi)}, {"hashall", SHOFF(opt_hashall)},
+        {"ignoreeof", SHOFF(opt_ignoreeof)}, {"braceexpand", SHOFF(opt_braceexpand)},
+        {"histexpand", SHOFF(opt_histexpand)}, {"history", SHOFF(opt_history)},
+        {"posix", SHOFF(opt_posix)}, {NULL, 0}
     };
     int i;
     for (i = 0; opts[i].n; i++)
-        if (strcmp(opts[i].n, name) == 0) return *opts[i].p != 0;
+        if (strcmp(opts[i].n, name) == 0) return *SHOPT(opts[i].off) != 0;
     return 0;
 }
 

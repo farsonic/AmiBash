@@ -135,7 +135,18 @@ int   os_next_shell_window(void);      /* bring the next Bash window to front */
 void  os_console_attach(void);         /* interactive: title + register   */
 void  os_console_detach(void);
 
+/* system description for uname */
+typedef struct OsSysInfo {
+    char sysname[16];      /* AmigaOS / AROS / Linux                   */
+    char release[32];      /* "3.2 (47.111)"                            */
+    char machine[16];      /* m68k                                      */
+    char processor[32];    /* 68030/68882                               */
+    char platform[16];     /* Amiga                                     */
+} OsSysInfo;
+void  os_sysinfo(OsSysInfo *si);
+
 void  os_init(void);
 void  os_cleanup(void);
+void  os_exit(int status);         /* end the program (after os_cleanup) */
 
 #endif

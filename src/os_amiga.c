@@ -17,6 +17,7 @@
 #include <dos/var.h>
 #include <dos/datetime.h>
 #include <proto/exec.h>
+#include <clib/alib_protos.h>
 #include <proto/dos.h>
 #include <intuition/intuition.h>
 #include <intuition/screens.h>
@@ -75,6 +76,16 @@ void os_cleanup(void)
         cwd_changed = 0;
     }
     if (IsInteractive(Input())) SetMode(Input(), 0);
+}
+
+void os_exit(int status)
+{
+#ifdef AMIBASH_PURE
+    void pure_exit(int);
+    pure_exit(status);
+#else
+    exit(status);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -186,8 +197,8 @@ const char *os_errstr(void)
     if (last_err == ERROR_DIRECTORY_NOT_EMPTY) return "Directory not empty";
     if (last_err == ERROR_OBJECT_IN_USE) return "Object in use";
     if (last_err == ERROR_DISK_FULL) return "No space left on device";
-    Fault(last_err, NULL, (STRPTR)buf, sizeof(buf));
-    return buf;
+    Fault(last_err, NULL, (STRPTR)NEARP(buf), sizeof(buf));
+    return NEARP(buf);
 }
 
 int os_errno_notfound(void)
@@ -505,7 +516,7 @@ char *os_fullpath(const char *path)
         last_err = IoErr();
         return NULL;
     }
-    if (!NameFromLock(l, (STRPTR)buf, sizeof(buf))) {
+    if (!NameFromLock(l, (STRPTR)NEARP(buf), sizeof(buf))) {
         last_err = IoErr();
         UnLock(l);
         return NULL;
@@ -572,7 +583,7 @@ static void sync_cwd_after(void)
     BPTR now = me()->pr_CurrentDir;
     if (now != cwd_before) {
         char buf[512];
-        if (now && NameFromLock(now, (STRPTR)buf, sizeof(buf))) sh_set_pwd(buf);
+        if (now && NameFromLock(now, (STRPTR)NEARP(buf), sizeof(buf))) sh_set_pwd(buf);
     }
 }
 
@@ -787,7 +798,7 @@ int os_break_cli(long n)
 char *os_getenv(const char *name)
 {
     char buf[1024];
-    LONG n = GetVar((STRPTR)name, (STRPTR)buf, sizeof(buf), 0);
+    LONG n = GetVar((STRPTR)name, (STRPTR)NEARP(buf), sizeof(buf), 0);
     if (n < 0) return NULL;
     return xstrdup(buf);
 }
@@ -816,7 +827,7 @@ void os_environ(void (*cb)(const char *n, const char *v, void *ud), void *ud)
     sl_init(&n);
     sl_init(&v);
     for (i = 0; globals[i]; i++) {
-        if (GetVar((STRPTR)globals[i], (STRPTR)buf, sizeof(buf), GVF_GLOBAL_ONLY) >= 0) {
+        if (GetVar((STRPTR)globals[i], (STRPTR)NEARP(buf), sizeof(buf), GVF_GLOBAL_ONLY) >= 0) {
             sl_adddup(&n, globals[i]);
             sl_adddup(&v, buf);
         }
@@ -890,7 +901,7 @@ long os_pid(void)
 
 const char *os_tmpdir(void)
 {
-    return tmpdir;
+    return NEARP(tmpdir);
 }
 
 const char *os_nulldev(void)
@@ -902,27 +913,27 @@ const char *os_hostname(void)
 {
     static char buf[64];
     if (!buf[0]) {
-        if (GetVar((STRPTR)"HOSTNAME", (STRPTR)buf, sizeof(buf), 0) < 0) strcpy(buf, "amiga");
+        if (GetVar((STRPTR)"HOSTNAME", (STRPTR)NEARP(buf), sizeof(buf), 0) < 0) strcpy(buf, "amiga");
     }
-    return buf;
+    return NEARP(buf);
 }
 
 const char *os_username(void)
 {
     static char buf[64];
     if (!buf[0]) {
-        if (GetVar((STRPTR)"USER", (STRPTR)buf, sizeof(buf), 0) < 0) strcpy(buf, "amiga");
+        if (GetVar((STRPTR)"USER", (STRPTR)NEARP(buf), sizeof(buf), 0) < 0) strcpy(buf, "amiga");
     }
-    return buf;
+    return NEARP(buf);
 }
 
 const char *os_default_home(void)
 {
     static char buf[256];
     if (!buf[0]) {
-        if (GetVar((STRPTR)"HOME", (STRPTR)buf, sizeof(buf), 0) < 0) strcpy(buf, "SYS:");
+        if (GetVar((STRPTR)"HOME", (STRPTR)NEARP(buf), sizeof(buf), 0) < 0) strcpy(buf, "SYS:");
     }
-    return buf;
+    return NEARP(buf);
 }
 
 /* PATH built from the CLI's command path, written Unix style so that
@@ -941,7 +952,7 @@ const char *os_default_path(void)
         int guard = 0;
         while (pn && guard++ < 64) {
             BPTR lock = pn[1];
-            if (lock && NameFromLock(lock, (STRPTR)buf, sizeof(buf))) {
+            if (lock && NameFromLock(lock, (STRPTR)NEARP(buf), sizeof(buf))) {
                 char *c = strchr(buf, ':');
                 if (c) {
                     sb_addc(&b, ':');
@@ -1295,11 +1306,24 @@ static void find_self(void)
         dir = GetProgramDir();
         if (!GetProgramName((STRPTR)name, sizeof(name))) strcpy(name, "bash");
     }
-    if (dir && NameFromLock(dir, (STRPTR)selfpath, sizeof(selfpath))) {
-        AddPart((STRPTR)selfpath, FilePart((STRPTR)name), sizeof(selfpath));
-    } else {
+    if (dir && NameFromLock(dir, (STRPTR)NEARP(selfpath), sizeof(selfpath))) {
+        AddPart((STRPTR)NEARP(selfpath), FilePart((STRPTR)name), sizeof(selfpath));
+    } else if (GetVar((STRPTR)"AMIBASH_SELF", (STRPTR)NEARP(selfpath), sizeof(selfpath), 0) <= 0) {
+        /* resident: the terminal says where the program came from */
         strcpy(selfpath, "C:bash");
     }
+}
+
+const char *os_self_path(void)
+{
+    find_self();
+    return NEARP(selfpath);
+}
+
+static int in_terminal(void)
+{
+    char b[8];
+    return GetVar((STRPTR)"AMIBASH_TERM", (STRPTR)b, sizeof(b), 0) >= 0;
 }
 
 static int count_bash_windows(int *maxnum)
@@ -1319,8 +1343,19 @@ static int count_bash_windows(int *maxnum)
 }
 
 static char winspec_tt[160];     /* WINDOW tool type from our icon */
+int os_new_window_only(void);
 
 int os_new_shell_window(void)
+{
+    if (in_terminal()) {
+        /* inside the AmiBash Terminal: open a tab instead of a window */
+        int r = term_request("new");
+        if (r != -2) return r;
+    }
+    return os_new_window_only();
+}
+
+int os_new_window_only(void)
 {
     struct Screen *scr;
     char spec[160], cmd[300];
@@ -1371,17 +1406,25 @@ int os_wb_launch(void)
         CurrentDir(old);
     }
     if (IconBase) CloseLibrary(IconBase);
+    /* the tabbed AmiBash Terminal; plain console window as fallback
+     * (or when the icon has the tool type CONSOLE) */
+    if (!winspec_tt[0]) {
+        find_self();
+        if (term_main(NEARP(selfpath)) == 0) return 1;
+    }
     /* started from Workbench: run in an own "Bash" window as a proper CLI
      * process; the window closes when that shell exits */
     os_new_shell_window();
     return 1;
 }
 
+int os_next_window_only(void);
+
 void os_console_attach(void)
 {
     struct Window *w = console_window();
     int maxnum;
-    if (!w || !open_intuition() || myport) return;
+    if (!w || !open_intuition() || myport || in_terminal()) return;
     count_bash_windows(&maxnum);
     myport = AllocVec(sizeof(BashPort), MEMF_PUBLIC | MEMF_CLEAR);
     if (!myport) return;
@@ -1410,6 +1453,12 @@ void os_console_detach(void)
 
 int os_next_shell_window(void)
 {
+    if (in_terminal() && term_request("next") != -2) return 0;
+    return os_next_window_only();
+}
+
+int os_next_window_only(void)
+{
     struct Node *n;
     struct Window *wins[32], *next = NULL;
     int nums[32], cnt = 0, i, best = -1;
@@ -1436,5 +1485,40 @@ int os_next_shell_window(void)
     }
     Permit();
     return next ? 0 : -1;
+}
+#endif
+
+#ifdef AMIGA
+/* ------------------------------------------------------------------ */
+/* system information                                                   */
+
+void os_sysinfo(OsSysInfo *si)
+{
+    static const struct { int v; const char *name; } rel[] = {
+        {33, "1.2"}, {34, "1.3"}, {36, "2.0"}, {37, "2.04"}, {38, "2.1"}, {39, "3.0"},
+        {40, "3.1"}, {44, "3.5"}, {45, "3.9"}, {46, "3.1.4"}, {47, "3.2"}, {0, NULL}
+    };
+    struct Library *aros = OpenLibrary((STRPTR)"aros.library", 0);
+    UWORD af = SysBase->AttnFlags;
+    int v = SysBase->LibNode.lib_Version, i;
+    const char *name = NULL;
+    memset(si, 0, sizeof(*si));
+    strcpy(si->sysname, aros ? "AROS" : "AmigaOS");
+    if (aros) CloseLibrary(aros);
+    for (i = 0; rel[i].name; i++)
+        if (rel[i].v == v) name = rel[i].name;
+    if (aros || !name) sprintf(si->release, "%d.%d", v, (int)SysBase->SoftVer);
+    else sprintf(si->release, "%s (%d.%d)", name, v, (int)SysBase->SoftVer);
+    strcpy(si->machine, "m68k");
+    if (af & (1 << 7)) strcpy(si->processor, "68060");
+    else if (af & AFF_68040) strcpy(si->processor, "68040");
+    else if (af & AFF_68030) strcpy(si->processor, "68030");
+    else if (af & AFF_68020) strcpy(si->processor, "68020");
+    else if (af & AFF_68010) strcpy(si->processor, "68010");
+    else strcpy(si->processor, "68000");
+    if (af & (1 << 6)) strcat(si->processor, "/FPU");
+    else if (af & AFF_68882) strcat(si->processor, "/68882");
+    else if (af & AFF_68881) strcat(si->processor, "/68881");
+    strcpy(si->platform, "Amiga");
 }
 #endif

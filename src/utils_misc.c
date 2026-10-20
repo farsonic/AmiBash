@@ -1216,10 +1216,21 @@ int util_uname(int argc, char **argv)
                                       "machine", "processor", "hardware-platform", "operating-system", NULL };
     UGetopt g;
     int c, flags = 0, first = 1, i;
+    OsSysInfo si;
+    static char verbuf[80];
+    const char *vals[8];
+    os_sysinfo(&si);
+    sprintf(verbuf, "AmiBash %s (%s build) %s", AMIBASH_SHORTVER, AMIBASH_BUILD, AMIBASH_DATE);
+    vals[0] = si.sysname;
+    vals[2] = si.release;
+    vals[3] = NEARP(verbuf);
+    vals[4] = si.machine;
+    vals[5] = si.processor;
+    vals[6] = si.platform;
 #ifdef AMIGA
-    const char *vals[8] = { "AmigaOS", NULL, "3.x", "AmiBash " AMIBASH_SHORTVER, "m68k", "m68k", "Amiga", "AmigaOS" };
+    vals[7] = si.sysname;
 #else
-    const char *vals[8] = { "Linux", NULL, "host", "AmiBash " AMIBASH_SHORTVER, "x86_64", "unknown", "unknown", "GNU/Linux" };
+    vals[7] = "GNU/Linux";
 #endif
     vals[1] = os_hostname();
     ug_init(&g, argc, argv, "asnrvmpio", lo);
@@ -1244,7 +1255,12 @@ int util_uname(int argc, char **argv)
         return 1;
     }
     ug_free(&g);
-    if (flags & 0x1000) flags = 1 | 2 | 4 | 8 | 16 | 128;
+    if (flags & 0x1000) {
+        /* like GNU: -p and -i only when known */
+        flags = 1 | 2 | 4 | 8 | 16 | 128;
+        if (strcmp(vals[5], "unknown") != 0 && strcmp(vals[5], vals[4]) != 0) flags |= 32;
+        if (strcmp(vals[6], "unknown") != 0) flags |= 64;
+    }
     if (!flags) flags = 1;
     for (i = 0; i < 8; i++) {
         if (flags & (1 << i)) {

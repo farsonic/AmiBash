@@ -657,7 +657,6 @@ static int getkey(void)
         /* a console in raw mode has no end-of-file: a 0/-1 read is a
          * transient condition (seen on AROS), so retry a little */
         if (++tries > 20 || !os_isatty(tin)) {
-            if (getenv("AMIBASH_DEBUG")) sh_printf(2, "[getkey: read=%ld]\n", r);
             return -1;
         }
         os_sleep_ms(20);
@@ -1054,7 +1053,6 @@ char *le_readline(const char *prompt)
             ed_delete(&e, e.pos, e.pos + 1);
             break;
         case 4:          /* ^D */
-            if (getenv("AMIBASH_DEBUG")) sh_printf(2, "[getkey: ^D]\n");
             if (e.buf.len == 0) {
                 out_s("\n");
                 out_flush();

@@ -160,7 +160,7 @@ static int bi_dirs(int argc, char **argv)
     int i, v = 0, p = 0;
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) {
-            sl_free(&sh.dirstack);
+            sl_free(NEARP(&sh.dirstack));
             return 0;
         }
         if (strcmp(argv[i], "-v") == 0) v = 1;
@@ -1244,37 +1244,37 @@ static int bi_shift(int argc, char **argv)
 /* ------------------------------------------------------------------ */
 /* set / shopt                                                          */
 
-typedef struct OptDef { const char *name; char letter; int *p; } OptDef;
+typedef struct OptDef { const char *name; char letter; int off; } OptDef;
 
 static OptDef setopts[] = {
-    {"allexport", 'a', &sh.opt_allexport},
-    {"braceexpand", 'B', &sh.opt_braceexpand},
-    {"emacs", 0, &sh.opt_emacs},
-    {"errexit", 'e', &sh.opt_errexit},
-    {"errtrace", 'E', &sh.opt_errtrace},
-    {"functrace", 'T', &sh.opt_functrace},
-    {"hashall", 'h', &sh.opt_hashall},
-    {"histexpand", 'H', &sh.opt_histexpand},
-    {"history", 0, &sh.opt_history},
-    {"ignoreeof", 0, &sh.opt_ignoreeof},
-    {"interactive-comments", 0, NULL},
-    {"keyword", 'k', NULL},
-    {"monitor", 'm', &sh.opt_monitor},
-    {"noclobber", 'C', &sh.opt_noclobber},
-    {"noexec", 'n', &sh.opt_noexec},
-    {"noglob", 'f', &sh.opt_noglob},
-    {"nolog", 0, NULL},
-    {"notify", 'b', &sh.opt_notify},
-    {"nounset", 'u', &sh.opt_nounset},
-    {"onecmd", 't', &sh.opt_onecmd},
-    {"physical", 'P', NULL},
-    {"pipefail", 0, &sh.opt_pipefail},
-    {"posix", 0, &sh.opt_posix},
-    {"privileged", 'p', NULL},
-    {"verbose", 'v', &sh.opt_verbose},
-    {"vi", 0, &sh.opt_vi},
-    {"xtrace", 'x', &sh.opt_xtrace},
-    {NULL, 0, NULL}
+    {"allexport", 'a', SHOFF(opt_allexport)},
+    {"braceexpand", 'B', SHOFF(opt_braceexpand)},
+    {"emacs", 0, SHOFF(opt_emacs)},
+    {"errexit", 'e', SHOFF(opt_errexit)},
+    {"errtrace", 'E', SHOFF(opt_errtrace)},
+    {"functrace", 'T', SHOFF(opt_functrace)},
+    {"hashall", 'h', SHOFF(opt_hashall)},
+    {"histexpand", 'H', SHOFF(opt_histexpand)},
+    {"history", 0, SHOFF(opt_history)},
+    {"ignoreeof", 0, SHOFF(opt_ignoreeof)},
+    {"interactive-comments", 0, 0},
+    {"keyword", 'k', 0},
+    {"monitor", 'm', SHOFF(opt_monitor)},
+    {"noclobber", 'C', SHOFF(opt_noclobber)},
+    {"noexec", 'n', SHOFF(opt_noexec)},
+    {"noglob", 'f', SHOFF(opt_noglob)},
+    {"nolog", 0, 0},
+    {"notify", 'b', SHOFF(opt_notify)},
+    {"nounset", 'u', SHOFF(opt_nounset)},
+    {"onecmd", 't', SHOFF(opt_onecmd)},
+    {"physical", 'P', 0},
+    {"pipefail", 0, SHOFF(opt_pipefail)},
+    {"posix", 0, SHOFF(opt_posix)},
+    {"privileged", 'p', 0},
+    {"verbose", 'v', SHOFF(opt_verbose)},
+    {"vi", 0, SHOFF(opt_vi)},
+    {"xtrace", 'x', SHOFF(opt_xtrace)},
+    {NULL, 0, 0}
 };
 
 static int set_option_name(const char *name, int on)
@@ -1282,7 +1282,7 @@ static int set_option_name(const char *name, int on)
     int i;
     for (i = 0; setopts[i].name; i++) {
         if (strcmp(setopts[i].name, name) == 0) {
-            if (setopts[i].p) *setopts[i].p = on;
+            if (setopts[i].off) *SHOPT(setopts[i].off) = on;
             if (strcmp(name, "vi") == 0 && on) sh.opt_emacs = 0;
             if (strcmp(name, "emacs") == 0 && on) sh.opt_vi = 0;
             return 0;
@@ -1299,7 +1299,7 @@ static int list_options(int plus, const char *only)
         int on;
         if (only && strcmp(only, setopts[i].name) != 0) continue;
         found = 1;
-        on = setopts[i].p ? *setopts[i].p : (strcmp(setopts[i].name, "interactive-comments") == 0);
+        on = setopts[i].off ? *SHOPT(setopts[i].off) : (strcmp(setopts[i].name, "interactive-comments") == 0);
         if (plus) sh_printf(1, "set %co %s\n", on ? '-' : '+', setopts[i].name);
         else sh_printf(1, "%-15s\t%s\n", setopts[i].name, on ? "on" : "off");
     }
@@ -1351,37 +1351,37 @@ static int bi_set(int argc, char **argv)
                 sh_puts(2, "set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\n");
                 return 2;
             }
-            if (setopts[k].p) *setopts[k].p = on;
+            if (setopts[k].off) *SHOPT(setopts[k].off) = on;
         }
     }
     return 0;
 }
 
-typedef struct ShoptDef { const char *name; int *p; } ShoptDef;
+typedef struct ShoptDef { const char *name; int off; } ShoptDef;
 
 static ShoptDef shopts[] = {
-    {"amigapaths", &sh.sh_pathconv},
-    {"autocd", &sh.sh_autocd},
-    {"cdspell", &sh.sh_cdspell},
-    {"checkwinsize", &sh.sh_checkwinsize},
-    {"cmdhist", &sh.sh_cmdhist},
-    {"dotglob", &sh.sh_dotglob},
-    {"expand_aliases", &sh.sh_expand_aliases},
-    {"extglob", &sh.sh_extglob},
-    {"failglob", &sh.sh_failglob},
-    {"globstar", &sh.sh_globstar},
-    {"histappend", &sh.sh_histappend},
-    {"lastpipe", &sh.sh_lastpipe},
-    {"nocaseglob", &sh.sh_nocaseglob},
-    {"nocasematch", &sh.sh_nocasematch},
-    {"nullglob", &sh.sh_nullglob},
-    {"xpg_echo", &sh.sh_xpg_echo},
-    {"extquote", NULL},
-    {"interactive_comments", NULL},
-    {"progcomp", NULL},
-    {"promptvars", NULL},
-    {"sourcepath", NULL},
-    {NULL, NULL}
+    {"amigapaths", SHOFF(sh_pathconv)},
+    {"autocd", SHOFF(sh_autocd)},
+    {"cdspell", SHOFF(sh_cdspell)},
+    {"checkwinsize", SHOFF(sh_checkwinsize)},
+    {"cmdhist", SHOFF(sh_cmdhist)},
+    {"dotglob", SHOFF(sh_dotglob)},
+    {"expand_aliases", SHOFF(sh_expand_aliases)},
+    {"extglob", SHOFF(sh_extglob)},
+    {"failglob", SHOFF(sh_failglob)},
+    {"globstar", SHOFF(sh_globstar)},
+    {"histappend", SHOFF(sh_histappend)},
+    {"lastpipe", SHOFF(sh_lastpipe)},
+    {"nocaseglob", SHOFF(sh_nocaseglob)},
+    {"nocasematch", SHOFF(sh_nocasematch)},
+    {"nullglob", SHOFF(sh_nullglob)},
+    {"xpg_echo", SHOFF(sh_xpg_echo)},
+    {"extquote", 0},
+    {"interactive_comments", 0},
+    {"progcomp", 0},
+    {"promptvars", 0},
+    {"sourcepath", 0},
+    {NULL, 0}
 };
 
 /* colon-separated list of enabled options ($SHELLOPTS / $BASHOPTS) */
@@ -1395,11 +1395,11 @@ char *shell_options_string(int set_opts)
     sb_addn(&b, "", 0);
     if (set_opts) {
         for (k = 0; setopts[k].name; k++)
-            if (setopts[k].p ? *setopts[k].p : strcmp(setopts[k].name, "interactive-comments") == 0)
+            if (setopts[k].off ? *SHOPT(setopts[k].off) : strcmp(setopts[k].name, "interactive-comments") == 0)
                 sl_adddup(&l, setopts[k].name);
     } else {
         for (k = 0; shopts[k].name; k++)
-            if (!shopts[k].p || *shopts[k].p) sl_adddup(&l, shopts[k].name);
+            if (!shopts[k].off || *SHOPT(shopts[k].off)) sl_adddup(&l, shopts[k].name);
     }
     sl_sort(&l, 0);
     for (k = 0; k < l.n; k++) {
@@ -1436,7 +1436,7 @@ static int bi_shopt(int argc, char **argv)
                 int k;
                 for (k = 0; setopts[k].name; k++)
                     if (strcmp(setopts[k].name, argv[i]) == 0) break;
-                if (!setopts[k].name || !setopts[k].p || !*setopts[k].p) status = 1;
+                if (!setopts[k].name || !setopts[k].off || !*SHOPT(setopts[k].off)) status = 1;
             } else if (!list_options(print, argv[i])) {
                 sh_cmd_error("shopt", "%s: invalid option name", argv[i]);
                 status = 1;
@@ -1448,7 +1448,7 @@ static int bi_shopt(int argc, char **argv)
     if (i >= argc) {
         int k;
         for (k = 0; shopts[k].name; k++) {
-            int on = shopts[k].p ? *shopts[k].p : 1;
+            int on = shopts[k].off ? *SHOPT(shopts[k].off) : 1;
             if (mode && (mode > 0) != on) continue;
             if (print) sh_printf(1, "shopt %s %s\n", on ? "-s" : "-u", shopts[k].name);
             else sh_printf(1, "%-15s\t%s\n", shopts[k].name, on ? "on" : "off");
@@ -1465,9 +1465,9 @@ static int bi_shopt(int argc, char **argv)
             continue;
         }
         if (mode) {
-            if (shopts[k].p) *shopts[k].p = mode > 0;
+            if (shopts[k].off) *SHOPT(shopts[k].off) = mode > 0;
         } else {
-            int on = shopts[k].p ? *shopts[k].p : 1;
+            int on = shopts[k].off ? *SHOPT(shopts[k].off) : 1;
             if (!quiet) {
                 if (print) sh_printf(1, "shopt %s %s\n", on ? "-s" : "-u", shopts[k].name);
                 else sh_printf(1, "%-15s\t%s\n", shopts[k].name, on ? "on" : "off");
@@ -2380,7 +2380,7 @@ static int bi_help(int argc, char **argv)
         }
         return 0;
     }
-    sh_printf(1, "AmiBash, version %s (bash-compatible shell for AmigaOS)\n", AMIBASH_VERSION);
+    sh_printf(1, "AmiBash %s (%s build), GNU bash %s compatible shell for AmigaOS\n", AMIBASH_SHORTVER, AMIBASH_BUILD, AMIBASH_VERSION);
     sh_puts(1, "These shell commands are defined internally.  Type `help name' to find out\n"
                "more about the function `name'.  Amiga commands in C: and the PATH are run\n"
                "normally; paths may be written DH0:dir/file or /dh0/dir/file.\n\n");

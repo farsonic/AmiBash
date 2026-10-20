@@ -22,6 +22,7 @@
 #include <sys/ioctl.h>
 #include <utime.h>
 #include <pwd.h>
+#include <sys/utsname.h>
 #include "os.h"
 #include "sh.h"
 
@@ -54,6 +55,11 @@ void os_init(void)
 void os_cleanup(void)
 {
     if (raw_on) os_rawmode(os_stdin(), 0);
+}
+
+void os_exit(int status)
+{
+    exit(status);
 }
 
 OsHandle os_open(const char *path, int mode)
@@ -578,6 +584,19 @@ int os_new_shell_window(void) { last_errno = ENOTSUP; return -1; }
 int os_next_shell_window(void) { last_errno = ENOTSUP; return -1; }
 void os_console_attach(void) { }
 void os_console_detach(void) { }
+
+void os_sysinfo(OsSysInfo *si)
+{
+    struct utsname u;
+    memset(si, 0, sizeof(*si));
+    if (uname(&u) == 0) {
+        snprintf(si->sysname, sizeof(si->sysname), "%.*s", (int)sizeof(si->sysname) - 1, u.sysname);
+        snprintf(si->release, sizeof(si->release), "%.*s", (int)sizeof(si->release) - 1, u.release);
+        snprintf(si->machine, sizeof(si->machine), "%.*s", (int)sizeof(si->machine) - 1, u.machine);
+        snprintf(si->processor, sizeof(si->processor), "%.*s", (int)sizeof(si->processor) - 1, u.machine);
+    }
+    strcpy(si->platform, "unknown");
+}
 
 int os_stack_ok(void)
 {

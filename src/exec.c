@@ -675,12 +675,12 @@ static void stack_pop(const char *name)
 }
 
 /* "local -": shell options restored when the function returns */
-static int *const opt_ptrs[] = {
-    &sh.opt_errexit, &sh.opt_nounset, &sh.opt_xtrace, &sh.opt_verbose,
-    &sh.opt_noglob, &sh.opt_noclobber, &sh.opt_allexport, &sh.opt_pipefail,
-    &sh.opt_noexec, &sh.opt_braceexpand, &sh.opt_posix, &sh.opt_functrace
+static const int opt_offs[] = {
+    SHOFF(opt_errexit), SHOFF(opt_nounset), SHOFF(opt_xtrace), SHOFF(opt_verbose),
+    SHOFF(opt_noglob), SHOFF(opt_noclobber), SHOFF(opt_allexport), SHOFF(opt_pipefail),
+    SHOFF(opt_noexec), SHOFF(opt_braceexpand), SHOFF(opt_posix), SHOFF(opt_functrace)
 };
-#define NOPTS ((int)(sizeof(opt_ptrs) / sizeof(opt_ptrs[0])))
+#define NOPTS ((int)(sizeof(opt_offs) / sizeof(opt_offs[0])))
 typedef struct OptSnap { int used; int v[NOPTS]; } OptSnap;
 static OptSnap *cur_optsnap;
 
@@ -689,7 +689,7 @@ int func_local_options(void)
     int i;
     if (!cur_optsnap) return 1;
     if (!cur_optsnap->used)
-        for (i = 0; i < NOPTS; i++) cur_optsnap->v[i] = *opt_ptrs[i];
+        for (i = 0; i < NOPTS; i++) cur_optsnap->v[i] = *SHOPT(opt_offs[i]);
     cur_optsnap->used = 1;
     return 0;
 }
@@ -760,7 +760,7 @@ int run_function(Func *f, int argc, char **argv)
     status = exec_node(f->body);
     cur_optsnap = save_snap;
     if (snap.used) {
-        for (i = 0; i < NOPTS; i++) *opt_ptrs[i] = snap.v[i];
+        for (i = 0; i < NOPTS; i++) *SHOPT(opt_offs[i]) = snap.v[i];
     }
     sh.lineno = save_lineno;        /* $LINENO is the caller's line again */
     exec_arena = save_arena;
@@ -880,7 +880,7 @@ int run_child_shell(int argc, char **argv)
         if (strcmp(a, "--norc") == 0 || strcmp(a, "--noprofile") == 0 || strcmp(a, "--login") == 0)
             continue;
         if (strcmp(a, "--version") == 0) {
-            sh_printf(1, "GNU bash compatible AmiBash, version %s\n", AMIBASH_VERSION);
+            sh_printf(1, "AmiBash %s (%s build, %s), GNU bash %s compatible\n", AMIBASH_SHORTVER, AMIBASH_BUILD, AMIBASH_DATE, AMIBASH_VERSION);
             return sub_leave(&st, 0);
         }
         if ((a[0] != '-' && a[0] != '+') || !a[1]) break;

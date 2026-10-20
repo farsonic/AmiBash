@@ -19,6 +19,13 @@
 #include <stdio.h>
 #include "sh.h"
 
+/* use the shell's allocator: error strings are released with xfree(),
+ * and the resident Amiga build has no C library heap */
+#define malloc(n) xmalloc(n)
+#define realloc(p, n) xrealloc(p, n)
+#define calloc(n, m) xcalloc((n) * (m))
+#define free(p) xfree(p)
+
 #define MAXDEPTH  32          /* parser nesting limit ( ( ( ...       */
 #define MAXCDEPTH 160         /* compiler tree depth limit             */
 #define MAXPROG   20000       /* compiled program size limit           */
