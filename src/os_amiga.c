@@ -18,6 +18,16 @@
 #include <dos/datetime.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <intuition/intuition.h>
+#include <intuition/screens.h>
+#include <graphics/text.h>
+#include <graphics/gfxbase.h>
+#include <graphics/view.h>
+#include <proto/graphics.h>
+#include <proto/diskfont.h>
+#include <diskfont/diskfont.h>
+#include <devices/conunit.h>
+#include <exec/io.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -53,6 +63,7 @@ void os_init(void)
 
 void os_cleanup(void)
 {
+    /* our_font stays open: the console window may still be using it */
     me()->pr_WindowPtr = old_winptr;
     if (cwd_changed) {
         BPTR mine = CurrentDir(orig_cwd);
@@ -141,8 +152,9 @@ int os_isatty(OsHandle h)
 
 int os_rawmode(OsHandle h, int on)
 {
-    raw_fh = on ? H2B(h) : 0;
-    return SetMode(H2B(h), on ? 1 : 0) ? 0 : -1;
+    LONG ok = SetMode(H2B(h), on ? 1 : 0);
+    raw_fh = on && ok ? H2B(h) : 0;
+    return ok ? 0 : -1;
 }
 
 int os_waitchar(OsHandle h, long usec)
@@ -1040,5 +1052,201 @@ int os_stack_ok(void)
     struct Task *t = FindTask(NULL);
     char here;
     return (char *)&here - (char *)t->tc_SPLower > 6000;
+}
+#endif
+
+#ifdef AMIGA
+/* ------------------------------------------------------------------ */
+/* console window: font and colours                                     */
+
+struct GfxBase *GfxBase;
+struct Library *DiskfontBase;
+static struct TextFont *our_font;   /* font we opened for the console */
+
+static int open_gfx(void)
+{
+    if (!GfxBase) GfxBase = (struct GfxBase *)OpenLibrary((STRPTR)"graphics.library", 36);
+    return GfxBase != NULL;
+}
+
+/* the Intuition window of our console and its console.device unit
+ * (ACTION_DISK_INFO: id_VolumeNode = window, id_InUse = IORequest) */
+static struct Window *console_window_unit(struct ConUnit **cu)
+{
+    struct MsgPort *ct = me()->pr_ConsoleTask;
+    struct InfoData *id;
+    struct Window *w = NULL;
+    if (cu) *cu = NULL;
+    if (!ct) return NULL;
+    id = AllocVec(sizeof(struct InfoData), MEMF_PUBLIC | MEMF_CLEAR);
+    if (!id) return NULL;
+    if (DoPkt(ct, ACTION_DISK_INFO, MKBADDR(id), 0, 0, 0, 0)) {
+        w = (struct Window *)id->id_VolumeNode;
+        if (cu && id->id_InUse) {
+            struct ConUnit *u = (struct ConUnit *)((struct IOStdReq *)id->id_InUse)->io_Unit;
+            if (u && u->cu_Window == w) *cu = u;
+        }
+    }
+    FreeVec(id);
+    return w;
+}
+
+static struct Window *console_window(void)
+{
+    return console_window_unit(NULL);
+}
+
+int os_console_getfont(char *name, int nsz, int *size)
+{
+    struct Window *w = console_window();
+    struct TextFont *f;
+    if (!w || !w->RPort || !(f = w->RPort->Font)) return -1;
+    strncpy(name, f->tf_Message.mn_Node.ln_Name ? f->tf_Message.mn_Node.ln_Name : "?", nsz - 1);
+    name[nsz - 1] = 0;
+    *size = f->tf_YSize;
+    return 0;
+}
+
+/* Without diskfont.library (e.g. a bare ROM boot) load FONTS:name/size
+ * ourselves: the file is a load module holding a DiskFontHeader right
+ * after the next-segment pointer and a 4-byte return code. */
+static struct TextFont *load_font_file(const char *fname, int size)
+{
+    char path[128];
+    char base[64];
+    BPTR seg;
+    struct DiskFontHeader *dfh;
+    struct TextFont *tf;
+    char *nm;
+    struct TextAttr ta;
+    size_t bl = strlen(fname) - 5;      /* strip ".font" */
+    if (bl >= sizeof(base)) return NULL;
+    memcpy(base, fname, bl);
+    base[bl] = 0;
+    sprintf(path, "FONTS:%s/%d", base, size);
+    seg = LoadSeg((STRPTR)path);
+    if (!seg) {
+        last_err = IoErr();
+        return NULL;
+    }
+    dfh = (struct DiskFontHeader *)((char *)BADDR(seg) + 8);
+    if (dfh->dfh_FileID != DFH_ID) {
+        UnLoadSeg(seg);
+        last_err = ERROR_OBJECT_WRONG_TYPE;
+        return NULL;
+    }
+    tf = &dfh->dfh_TF;
+    nm = AllocVec(strlen(fname) + 1, MEMF_PUBLIC);
+    if (!nm) {
+        UnLoadSeg(seg);
+        return NULL;
+    }
+    strcpy(nm, fname);
+    tf->tf_Message.mn_Node.ln_Name = (STRPTR)nm;
+    tf->tf_Message.mn_Node.ln_Type = NT_FONT;
+    AddFont(tf);                        /* stays loaded for the session */
+    ta.ta_Name = (STRPTR)fname;
+    ta.ta_YSize = (UWORD)size;
+    ta.ta_Style = 0;
+    ta.ta_Flags = 0;
+    return OpenFont(&ta);
+}
+
+int os_console_setfont(const char *name, int size)
+{
+    struct Window *w = console_window();
+    struct TextAttr ta;
+    struct TextFont *f = NULL;
+    char fname[64];
+    last_err = 0;
+    if (!w || !open_gfx()) {
+        last_err = ERROR_OBJECT_WRONG_TYPE;
+        return -1;
+    }
+    strncpy(fname, name, sizeof(fname) - 6);
+    fname[sizeof(fname) - 6] = 0;
+    if (!str_endswith(fname, ".font")) strcat(fname, ".font");
+    ta.ta_Name = (STRPTR)fname;
+    ta.ta_YSize = (UWORD)size;
+    ta.ta_Style = 0;
+    ta.ta_Flags = 0;
+    if (!DiskfontBase) DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
+    if (DiskfontBase) f = OpenDiskFont(&ta);
+    if (!f) f = OpenFont(&ta);
+    if (!f) f = load_font_file(fname, size);
+    if (!f) {
+        if (!last_err) last_err = ERROR_OBJECT_NOT_FOUND;
+        return -1;
+    }
+    if (f->tf_Flags & FPF_PROPORTIONAL) {
+        CloseFont(f);
+        last_err = ERROR_BAD_TEMPLATE;   /* reported as "not a fixed-width font" */
+        return -2;
+    }
+    SetFont(w->RPort, f);
+    {
+        /* tell console.device about the new character cell */
+        struct ConUnit *cu;
+        console_window_unit(&cu);
+        if (cu) {
+            int xo, yo;
+            Forbid();
+            xo = cu->cu_XROrigin;
+            yo = cu->cu_YROrigin;
+            cu->cu_Font = f;
+            cu->cu_XRSize = f->tf_XSize;
+            cu->cu_YRSize = f->tf_YSize;
+            cu->cu_XMax = (w->Width - w->BorderRight - xo) / f->tf_XSize - 1;
+            cu->cu_YMax = (w->Height - w->BorderBottom - yo) / f->tf_YSize - 1;
+            if (cu->cu_XMax < 0) cu->cu_XMax = 0;
+            if (cu->cu_YMax < 0) cu->cu_YMax = 0;
+            cu->cu_XRExtant = xo + (cu->cu_XMax + 1) * f->tf_XSize - 1;
+            cu->cu_YRExtant = yo + (cu->cu_YMax + 1) * f->tf_YSize - 1;
+            if (cu->cu_XCP > cu->cu_XMax) cu->cu_XCP = cu->cu_XMax;
+            if (cu->cu_YCP > cu->cu_YMax) cu->cu_YCP = cu->cu_YMax;
+            Permit();
+        }
+    }
+    if (our_font) CloseFont(our_font);
+    our_font = f;
+    /* home + clear: redraw everything in the new character cell */
+    Write(Output(), (APTR)"\f", 1);
+    return 0;
+}
+
+static struct Screen *console_screen(void)
+{
+    struct Window *w = console_window();
+    return w ? w->WScreen : NULL;
+}
+
+int os_console_pens(void)
+{
+    struct Screen *s = console_screen();
+    if (!s) return -1;
+    return 1 << s->RastPort.BitMap->Depth;
+}
+
+int os_console_getpen(int pen, unsigned long *rgb)
+{
+    struct Screen *s = console_screen();
+    ULONG c;
+    if (!s || !open_gfx() || pen < 0 || pen >= os_console_pens()) return -1;
+    c = GetRGB4(s->ViewPort.ColorMap, pen);
+    /* 0x0RGB -> 0xRRGGBB */
+    *rgb = ((c >> 8) & 15) * 0x110000UL + ((c >> 4) & 15) * 0x1100UL + (c & 15) * 0x11UL;
+    return 0;
+}
+
+int os_console_setpen(int pen, unsigned long rgb)
+{
+    struct Screen *s = console_screen();
+    if (!s || !open_gfx() || pen < 0 || pen >= os_console_pens()) return -1;
+    if (GfxBase->LibNode.lib_Version >= 39)
+        SetRGB32(&s->ViewPort, pen, ((rgb >> 16) & 255) * 0x01010101UL,
+                 ((rgb >> 8) & 255) * 0x01010101UL, (rgb & 255) * 0x01010101UL);
+    else
+        SetRGB4(&s->ViewPort, pen, (rgb >> 20) & 15, (rgb >> 12) & 15, (rgb >> 4) & 15);
+    return 0;
 }
 #endif

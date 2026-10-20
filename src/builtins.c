@@ -2564,6 +2564,135 @@ static int bi_ados(int argc, char **argv)
     return r;
 }
 
+/* showkey: print the bytes each key sends (to diagnose terminals) */
+static int bi_showkey(int argc, char **argv)
+{
+    OsHandle in = os_stdin();
+    int idle = 0;
+    (void)argc;
+    (void)argv;
+    if (!os_isatty(in)) {
+        sh_cmd_error("showkey", "stdin is not a console");
+        return 1;
+    }
+    sh_puts(1, "Press keys to see their codes; 'q' or 10 s idle quits.\n");
+    sh_flush_all();
+    if (os_rawmode(in, 1) != 0) {
+        sh_cmd_error("showkey", "console does not support raw mode (no line editing possible)");
+        return 1;
+    }
+    for (;;) {
+        unsigned char buf[16];
+        long n, i;
+        if (!os_waitchar(in, 1000000L)) {
+            if (++idle >= 10) break;
+            continue;
+        }
+        idle = 0;
+        n = os_read(in, buf, 1);
+        /* collect the rest of an escape sequence */
+        while (n > 0 && n < (long)sizeof(buf) && os_waitchar(in, 50000L)) {
+            long r = os_read(in, buf + n, 1);
+            if (r != 1) break;
+            n++;
+        }
+        if (n <= 0) break;
+        {
+            SBuf b;
+            sb_init(&b);
+            for (i = 0; i < n; i++) sb_printf(&b, "%s%02X", i ? " " : "", buf[i]);
+            sb_adds(&b, "   ");
+            for (i = 0; i < n; i++) {
+                if (buf[i] == 0x9B) sb_adds(&b, "CSI ");
+                else if (buf[i] == 27) sb_adds(&b, "ESC ");
+                else if (buf[i] < 32) sb_printf(&b, "^%c ", buf[i] + 64);
+                else sb_printf(&b, "%c", buf[i]);
+            }
+            sb_adds(&b, "\r\n");
+            os_write(os_stdout(), b.s, b.len);
+            sb_free(&b);
+        }
+        if (n == 1 && buf[0] == 'q') break;
+    }
+    os_rawmode(in, 0);
+    return 0;
+}
+
+/* setfont [NAME SIZE]: show or change the console window's font */
+static int bi_setfont(int argc, char **argv)
+{
+    char name[64];
+    int size, r;
+    if (argc == 1) {
+        if (os_console_getfont(name, sizeof(name), &size) != 0) {
+            sh_cmd_error("setfont", "no console window");
+            return 1;
+        }
+        sh_printf(1, "%s %d\n", name, size);
+        return 0;
+    }
+    if (argc != 3 || !str_isnum(argv[2])) {
+        sh_puts(2, "setfont: usage: setfont [fontname size]   e.g. setfont topaz 8\n");
+        return 2;
+    }
+    r = os_console_setfont(argv[1], atoi(argv[2]));
+    if (r == -2) {
+        sh_cmd_error("setfont", "%s %s: not a fixed-width font", argv[1], argv[2]);
+        return 1;
+    }
+    if (r != 0) {
+        sh_cmd_error("setfont", "%s %s: %s", argv[1], argv[2], os_errstr());
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_rgb(const char *s, unsigned long *rgb)
+{
+    char *end;
+    size_t n;
+    if (*s == '#') s++;
+    else if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    n = strlen(s);
+    if (n != 3 && n != 6) return 0;
+    *rgb = strtoul(s, &end, 16);
+    if (*end) return 0;
+    if (n == 3) /* RGB4 shorthand, Amiga style */
+        *rgb = ((*rgb >> 8) & 15) * 0x110000UL + ((*rgb >> 4) & 15) * 0x1100UL + (*rgb & 15) * 0x11UL;
+    return 1;
+}
+
+/* palette [PEN [#RRGGBB|#RGB]]: list or set the screen colours used by
+ * ANSI colour codes (ESC[30m..37m use pens 0..7) */
+static int bi_palette(int argc, char **argv)
+{
+    int n = os_console_pens(), i;
+    unsigned long rgb;
+    if (argc == 1 || (argc == 2 && strcmp(argv[1], "-l") == 0)) {
+        if (n < 0) {
+            sh_cmd_error("palette", "no console screen");
+            return 1;
+        }
+        for (i = 0; i < n && i < 32; i++) {
+            if (os_console_getpen(i, &rgb) != 0) {
+                sh_cmd_error("palette", "cannot read the palette here");
+                return 1;
+            }
+            sh_printf(1, "pen %2d  #%06lX  \033[%dm sample \033[0m\n", i, rgb, i < 8 ? 30 + i : 39);
+        }
+        return 0;
+    }
+    if (argc != 3 || !str_isnum(argv[1]) || !parse_rgb(argv[2], &rgb)) {
+        sh_puts(2, "palette: usage: palette [pen RRGGBB]   e.g. palette 3 ff8800  (quote a leading #)\n");
+        return 2;
+    }
+    if (os_console_setpen(atoi(argv[1]), rgb) != 0) {
+        sh_cmd_error("palette", "pen %s: cannot set", argv[1]);
+        return 1;
+    }
+    return 0;
+}
+
 static int bi_logout(int argc, char **argv)
 {
     return bi_exit(argc, argv);
@@ -2607,6 +2736,7 @@ const Builtin shell_builtins[] = {
     {"local", bi_local, 0, "local [option] name[=value] ..."},
     {"logout", bi_logout, 0, "logout [n]"},
     {"mapfile", bi_mapfile, 0, "mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [array]"},
+    {"palette", bi_palette, 0, "palette [pen #RRGGBB]  - list/set the screen colours (Amiga)"},
     {"popd", bi_popd, 0, "popd"},
     {"printf", bi_printf, 0, "printf [-v var] format [arguments]"},
     {"pushd", bi_pushd, 0, "pushd [dir]"},
@@ -2616,7 +2746,9 @@ const Builtin shell_builtins[] = {
     {"readonly", bi_readonly, BI_SPECIAL, "readonly [-aAf] [name[=value] ...] or readonly -p"},
     {"return", bi_return, BI_SPECIAL, "return [n]"},
     {"set", bi_set, BI_SPECIAL, "set [-abefhkmnptuvxBCHP] [-o option-name] [--] [arg ...]"},
+    {"setfont", bi_setfont, 0, "setfont [name size]  - show/change the console font (Amiga)"},
     {"sh", run_child_shell, 0, "sh [-ceux] [-c command | script] [args]  - same as bash"},
+    {"showkey", bi_showkey, 0, "showkey  - show the codes keys send (diagnose cursor keys)"},
     {"shift", bi_shift, BI_SPECIAL, "shift [n]"},
     {"shopt", bi_shopt, 0, "shopt [-pqsu] [-o] [optname ...]"},
     {"source", bi_source, 0, "source filename [arguments]"},

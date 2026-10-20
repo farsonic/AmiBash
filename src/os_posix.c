@@ -540,6 +540,39 @@ double os_freespace(const char *path, double *total)
     return -1;
 }
 
+int os_console_getfont(char *name, int nsz, int *size)
+{
+    (void)name; (void)nsz; (void)size;
+    return -1;
+}
+
+int os_console_setfont(const char *name, int size)
+{
+    (void)name; (void)size;
+    last_errno = ENOTSUP;
+    return -1;
+}
+
+int os_console_pens(void)
+{
+    return 8;
+}
+
+int os_console_getpen(int pen, unsigned long *rgb)
+{
+    (void)pen; (void)rgb;
+    return -1;
+}
+
+int os_console_setpen(int pen, unsigned long rgb)
+{
+    /* xterm-compatible terminals: OSC 4 */
+    char b[64];
+    int n = snprintf(b, sizeof(b), "\033]4;%d;rgb:%02lx/%02lx/%02lx\033\\", pen,
+                     (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
+    return write(1, b, n) == n ? 0 : -1;
+}
+
 int os_stack_ok(void)
 {
     return 1;

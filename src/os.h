@@ -121,6 +121,13 @@ void  os_list_volumes(int (*cb)(const char *name, int isvol, void *ud), void *ud
 double os_freespace(const char *path, double *total);
 unsigned long os_random_seed(void);
 
+/* console window appearance (Amiga console; -1 = not supported) */
+int   os_console_getfont(char *name, int nsz, int *size);
+int   os_console_setfont(const char *name, int size);   /* 0 ok, else msg in os_errstr */
+int   os_console_pens(void);                            /* number of colours */
+int   os_console_getpen(int pen, unsigned long *rgb);   /* rgb = 0xRRGGBB */
+int   os_console_setpen(int pen, unsigned long rgb);
+
 void  os_init(void);
 void  os_cleanup(void);
 

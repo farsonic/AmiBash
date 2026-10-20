@@ -13,6 +13,14 @@ HISTCONTROL=ignoredups:ignorespace
 # The Amiga file system is case-insensitive; match globs the same way.
 shopt -s nocaseglob
 
+# Colours: ls and grep colour their output on the console
+alias ls='ls --color=auto'
+alias grep='grep --color=auto'
+
+# Screen colours and console font (Amiga only), e.g.:
+#   palette 0 102040; palette 1 ffff80; palette 3 ff8800   # dark theme
+#   setfont topaz 9          # any fixed-width font in FONTS:
+
 # Handy aliases
 alias ll='ls -l'
 alias la='ls -la'

@@ -323,7 +323,8 @@ static int ls_dir(const char *cmd, const char *path, int header, int *first, LsO
     ls_sort(v, n, o);
     if (header) {
         if (!*first) sh_putc(1, '\n');
-        sh_printf(1, "%s:\n", path);
+        /* "RAM:" is printed as is, not "RAM::" */
+        sh_printf(1, "%s%s\n", path, str_endswith(path, ":") ? "" : ":");
     }
     *first = 0;
     if (o->longf && o->total_hdr) {

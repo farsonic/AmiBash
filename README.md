@@ -100,7 +100,8 @@ scripts see them (`$name` in AmigaDOS, `GetVar()`).
   continue declare dirs echo enable eval exec exit export false fg getopts hash help
   history jobs kill let local logout mapfile popd printf pushd pwd read
   readarray readonly return set sh shift shopt source test times trap true
-  type typeset ulimit umask unalias unset wait which [ : . ados`.
+  type typeset ulimit umask unalias unset wait which [ : . ados`,
+  plus Amiga console helpers `palette`, `setfont` and `showkey`.
 * **Utilities built in** (so a bare Amiga gets the usual Unix tools): `ls cat
   cp mv rm mkdir rmdir touch chmod find du df stat realpath head tail wc grep
   egrep fgrep sort uniq cut tr sed tee seq rev nl paste tac basename dirname
@@ -116,6 +117,37 @@ scripts see them (`$name` in AmigaDOS, `GetVar()`).
   `$variables`, volumes and assigns (`Wo<Tab>` → `Work:`), double-Tab lists.
   Ctrl-C interrupts loops and commands. The prompt understands `\u \h \w \W \$
   \t \d \D{fmt} \[ \]` and ANSI colours.
+
+## Line editing, colours and fonts
+
+Editing keys: Up/Down history (Shift-Up/Down: oldest/newest), Left/Right,
+Shift-Left/Right or Ctrl-A/Ctrl-E for start/end of line, Ctrl-B/F, Ctrl-K/U/W
+(kill), Ctrl-Y (yank), Ctrl-T, Ctrl-L (clear), Ctrl-D, Ctrl-R (search), Tab.
+
+If these keys do nothing:
+
+* run `showkey` and press them. On an Amiga console Up should print
+  `9B 41 CSI A` and Ctrl-A `01 ^A`. If nothing appears, the key never
+  reaches the Amiga. **FS-UAE maps the cursor keys and Right-Ctrl to an
+  emulated joystick by default**: set `joystick_port_1 = none` (and
+  `joystick_port_0 = mouse`) in the config, or use the Left Ctrl key.
+* if bash prints "this console has no raw mode", the console (or vamos)
+  can't deliver single keys, so bash falls back to plain line input.
+
+Colours: the console understands ANSI colours (`ESC[30m`…`ESC[37m` = pens
+0–7, plus bold, italic, underline and inverse), so coloured prompts, `ls
+--color` and `grep --color` work. On a 4-colour Workbench only pens 0–3
+differ.
+
+* `palette` lists the screen's pens, and `palette 3 ff8800` sets one
+  (12-bit `f80` also works; quote a leading `#`). This changes the screen
+  palette, as Prefs/Palette does.
+* `setfont` shows the console font, and `setfont topaz 9` / `setfont
+  xen 8` switch the window to any fixed-width font in `FONTS:`. It uses
+  diskfont.library when available, or loads the font file itself. For a
+  permanent change set the "System Default Text" font in Prefs/Font.
+* `tools/pcf2amigafont.py` converts Linux PCF bitmap fonts into Amiga
+  fonts.
 
 ## Known differences from GNU bash
 

@@ -932,7 +932,30 @@ char *le_readline(const char *prompt)
         }
     }
     sh_flush_all();
-    os_rawmode(tin, 1);
+    if (os_rawmode(tin, 1) != 0) {
+        /* console without raw mode (e.g. a pipe-like handler or vamos):
+         * plain line input, and say why the editing keys do nothing */
+        static int warned;
+        SBuf l;
+        unsigned char ch;
+        if (!warned++)
+            out_s("bash: this console has no raw mode; line editing and history keys are off\n");
+        out_prompt(e.prompt);
+        out_flush();
+        sb_init(&l);
+        sb_addn(&l, "", 0);
+        for (;;) {
+            if (os_read(tin, &ch, 1) != 1) {
+                sb_free(&l);
+                sb_free(&e.buf);
+                return NULL;
+            }
+            if (ch == '\n' || ch == '\r') break;
+            sb_addc(&l, ch);
+        }
+        sb_free(&e.buf);
+        return sb_take(&l);
+    }
     refresh(&e);
     for (;;) {
         int c = getkey();
