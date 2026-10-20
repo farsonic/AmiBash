@@ -1389,6 +1389,34 @@ int os_new_window_only(void)
     return 0;
 }
 
+/* "bash --term" typed in a shell: open the AmiBash Terminal (or a new
+ * tab in the one already running) without tying up this shell */
+int os_open_terminal(void)
+{
+    char cmd[300];
+    BPTR in, out;
+    LONG r = term_request("new");
+    if (r != -2) return r == 0 ? 0 : -1;
+    find_self();
+    in = Open((STRPTR)"NIL:", MODE_OLDFILE);
+    out = Open((STRPTR)"NIL:", MODE_NEWFILE);
+    if (!in || !out) {
+        if (in) Close(in);
+        if (out) Close(out);
+        return -1;
+    }
+    sprintf(cmd, "\"%s\" --term", selfpath);
+    r = SystemTags((STRPTR)cmd, SYS_Input, in, SYS_Output, out, SYS_Asynch, TRUE,
+                   NP_StackSize, 16384, TAG_END);
+    if (r == -1) {
+        last_err = IoErr();
+        Close(in);
+        Close(out);
+        return -1;
+    }
+    return 0;
+}
+
 int os_wb_launch(void)
 {
     struct Library *IconBase;

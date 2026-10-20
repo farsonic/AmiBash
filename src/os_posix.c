@@ -581,6 +581,7 @@ int os_console_setpen(int pen, unsigned long rgb)
 
 int os_wb_launch(void) { return 0; }
 int os_new_shell_window(void) { last_errno = ENOTSUP; return -1; }
+int os_open_terminal(void) { last_errno = ENOTSUP; return -1; }
 int os_next_shell_window(void) { last_errno = ENOTSUP; return -1; }
 void os_console_attach(void) { }
 void os_console_detach(void) { }

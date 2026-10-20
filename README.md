@@ -128,8 +128,12 @@ tab bar like macOS Terminal's, each tab running its own bash.
  x        bash: Work:        A1 | x       bash: RAM:        A2 | +
 ```
 
-Double-click `bash` on Workbench, or type `bash --term` in a Shell, to open
-it.
+Double-click `bash` on Workbench, or type `bash --term` in a Shell or at a
+bash prompt, to open it (from bash it starts in the background and the
+current shell carries on; if a terminal is already open you get a new tab).
+If double-clicking gives a plain "Bash" console window instead, the icon
+still has an active `WINDOW=` tool type (as `bash.info` from 0.9.2 did):
+use the new `bash.info`, or put that tool type in brackets.
 
 | Key / mouse / command | Action |
 |---|---|

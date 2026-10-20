@@ -879,9 +879,19 @@ int run_child_shell(int argc, char **argv)
         }
         if (strcmp(a, "--norc") == 0 || strcmp(a, "--noprofile") == 0 || strcmp(a, "--login") == 0)
             continue;
+        if (strcmp(a, "--term") == 0) {
+            /* the tabbed terminal runs as a program of its own */
+            if (os_open_terminal() == 0) return sub_leave(&st, 0);
+            sh_error("--term: %s", os_errstr());
+            return sub_leave(&st, 1);
+        }
         if (strcmp(a, "--version") == 0) {
             sh_printf(1, "AmiBash %s (%s build, %s), GNU bash %s compatible\n", AMIBASH_SHORTVER, AMIBASH_BUILD, AMIBASH_DATE, AMIBASH_VERSION);
             return sub_leave(&st, 0);
+        }
+        if (a[0] == '-' && a[1] == '-') {
+            sh_error("%s: invalid option", a);
+            return sub_leave(&st, 2);
         }
         if ((a[0] != '-' && a[0] != '+') || !a[1]) break;
         for (p = a + 1; *p; p++) {
