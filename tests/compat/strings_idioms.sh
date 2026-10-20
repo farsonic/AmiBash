@@ -1,0 +1,46 @@
+path=/usr/local/share/doc/readme.txt
+echo "basename: ${path##*/}"
+echo "dirname: ${path%/*}"
+file=${path##*/}
+echo "ext: ${file##*.} name: ${file%.*}"
+s="Hello, World"
+echo "len ${#s}"
+echo "upper ${s^^} lower ${s,,}"
+echo "replace ${s/World/There}"
+echo "sub ${s:7:5}"
+str="  padded  "
+trimmed="${str#"${str%%[![:space:]]*}"}"; trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+echo "[$trimmed]"
+csv="a,b,c,d"
+IFS=, read -ra parts <<< "$csv"; echo "${#parts[@]} parts, last=${parts[-1]}"
+echo "${csv//,/ }"
+joined=$(IFS=:; echo "${parts[*]}"); echo "$joined"
+rev=""; w=abcdef; for ((i=${#w}-1; i>=0; i--)); do rev+=${w:i:1}; done; echo "$rev"
+count=$(grep -o a <<< "banana" | wc -l); echo "a count: $count"
+x=banana; y=${x//[^a]}; echo "a count 2: ${#y}"
+[[ $s == *World* ]] && echo "contains World"
+[[ $s == Hello* ]] && echo "starts with Hello"
+case $s in *,*) echo "has comma";; esac
+num=42; printf -v padded '%05d' "$num"; echo "$padded"
+printf '%s\n' "${s,,}" | tr ' ' '_'
+lower=$(echo "$s" | tr '[:upper:]' '[:lower:]'); echo "$lower"
+echo "$s" | sed 's/World/sed/'
+echo "$s" | cut -c1-5
+repeat=$(printf '%.0s-' {1..10}); echo "$repeat"
+line=$(printf '=%.0s' $(seq 1 5)); echo "$line"
+v="key=value=more"; echo "${v%%=*} | ${v#*=}"
+url="https://example.com:8080/path/to?x=1"
+proto=${url%%://*}; rest=${url#*://}; host=${rest%%/*}; port=${host##*:}; host=${host%:*}
+echo "$proto $host $port /${rest#*/}"
+words="the quick brown fox"; set -- $words; echo "$# words, 3rd=$3"
+arr=($words); echo "${arr[@]^}"
+echo "${words// /}"
+i=0; for w in $words; do ((i+=${#w})); done; echo "letters $i"
+s2="a-b_c d"; echo "${s2//[-_ ]/.}"
+echo "$(( ${#words} - ${#words// } )) spaces"
+printf '%s\n' "${arr[@]}" | sort -r | head -2
+hex=$(printf '%x' 255); echo "$hex $((16#$hex))"
+str="x"; str+="y"; str+=$((1+1)); echo "$str"
+name="file name with spaces.tar.gz"; echo "${name%%.*}" "${name#*.}"
+echo "${name// /_}"
+upperfirst="${name^}"; echo "$upperfirst"

@@ -1,0 +1,23 @@
+mkdir -p d1/d2 d3
+start=$PWD
+cd d1 && echo "${PWD#$start}"
+cd d2 && echo "${PWD#$start}"
+cd .. && echo "${PWD#$start}"
+cd - >/dev/null && echo "${PWD#$start}"
+cd "$start"
+cd ./d3/../d1 && echo "${PWD#$start}"
+cd "$start"
+echo "${OLDPWD#$start}"
+pushd d1 >/dev/null && echo "pushd ${PWD#$start}"
+pushd ../d3 >/dev/null && echo "pushd2 ${PWD#$start}"
+dirs -v | wc -l
+popd >/dev/null && echo "popd ${PWD#$start}"
+popd >/dev/null && echo "popd2 ${PWD#$start}"
+popd 2>/dev/null || echo "stack empty"
+cd nonexistent_zz 2>/dev/null || echo "cd failed $?"
+cd "$start"; pwd | sed "s#$start#START#"
+(cd d1; pwd | sed "s#$start#START#"); pwd | sed "s#$start#START#"
+cd; [ "$PWD" = "$HOME" ] && echo "cd home"
+cd "$start"
+CDPATH=$start cd d2 2>/dev/null; cd "$start"
+cd d1/d2; cd ../..; [ "$PWD" = "$start" ] && echo "back to start"

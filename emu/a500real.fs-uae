@@ -1,0 +1,15 @@
+[config]
+amiga_model = A500
+hard_drive_0 = /home/user/amibash/emu/dh0
+hard_drive_0_label = Work
+sound_card = none
+floppy_drive_volume = 0
+window_width = 1280
+window_height = 1024
+fullscreen = 0
+automatic_input_grab = 0
+initial_input_grab = 0
+video_sync = 0
+joystick_port_0 = mouse
+joystick_port_1 = none
+accuracy = 1

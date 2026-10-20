@@ -1,0 +1,28 @@
+Short:        Bash-compatible shell for AmigaOS (no ixemul)
+Author:       AmiBash contributors
+Uploader:     farsonic@gmail.com
+Type:         util/shell
+Version:      0.9
+Architecture: m68k-amigaos >= 2.0.4; m68k-aros
+Distribution: Aminet
+License:      GPL-3.0-or-later
+
+AmiBash gives the Amiga the bash experience: bash syntax and scripting,
+emacs-style line editing, history with Ctrl-R, tab completion of commands,
+files and volumes, functions, arrays, [[ ]], $(( )), here-docs, and the
+usual Unix tools built in (ls, cat, grep, sed, sort, find, cut, tr, wc, ...).
+
+It is a native dos.library program: no ixemul.library, no Unix emulation.
+Amiga paths (DH0:Work/x) and Unix-style paths (/dh0/Work/x) both work; "/"
+lists all volumes and assigns.  Amiga commands run directly with correct
+ReadArgs() quoting, Ctrl-C works, return codes become $?.
+
+Its behaviour is checked against GNU bash 5.2 with a test corpus, and it
+runs on 68000 with 1 MB (bash) or 68020+ (bash020).
+
+Install:  Copy bash TO C:        (or bash020 AS C:bash on 68020+)
+          Copy S/bashrc TO S:    (optional)
+          then type "bash" in a Shell window.
+
+See README.md for details, the list of differences from GNU bash and
+build instructions (vbcc, NDK 3.2).

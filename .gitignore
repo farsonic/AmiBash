@@ -1,0 +1,6 @@
+build/
+emu/dh0/C/bash
+emu/dh0/*.txt
+emu/dh0/T/
+dist/AmiBash.lha
+*.o

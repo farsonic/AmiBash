@@ -1,0 +1,26 @@
+# S:bashrc - system-wide AmiBash startup file (read by interactive shells
+# before ~/.bashrc).  Copy to S: and edit to taste.
+
+# Prompt: bold user@host, then the current directory (pen 3 = blue on the
+# default Workbench palette).  \w shows ~ for $HOME.
+PS1='\[\e[1m\]\u@\h\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
+
+# Where "cd" with no arguments goes, and where history is kept.
+# HOME=SYS:Home        # uncomment (and MakeDir SYS:Home) for a home directory
+HISTSIZE=500
+HISTCONTROL=ignoredups:ignorespace
+
+# The Amiga file system is case-insensitive; match globs the same way.
+shopt -s nocaseglob
+
+# Handy aliases
+alias ll='ls -l'
+alias la='ls -la'
+alias l='ls -F'
+alias ..='cd ..'
+alias md='mkdir -p'
+alias cls='clear'
+
+# Run any AmigaDOS command line through the native shell, e.g.
+#   ados 'list SYS: PAT=#?.info'
+# (AmigaDOS commands in C: can also be run directly: List, Copy, Info ...)
