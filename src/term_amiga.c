@@ -293,14 +293,16 @@ static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
 #define DMAXROWS 512
 static int batching;                 /* inside term_write()             */
 static int pend_scroll;              /* lines to scroll up at the flush  */
-static WORD dmin[DMAXROWS], dmax[DMAXROWS];   /* changed cells per row */
+static WORD *dmg;                    /* changed cells per row: from, to  */
+#define dmin(y) dmg[(y)]
+#define dmax(y) dmg[DMAXROWS + (y)]
 
 static void damage_clear(void)
 {
     int y;
-    for (y = 0; y < DMAXROWS; y++) {
-        dmin[y] = 0x7FFF;
-        dmax[y] = 0;
+    for (y = 0; dmg && y < DMAXROWS; y++) {
+        dmin(y) = 0x7FFF;
+        dmax(y) = 0;
     }
     pend_scroll = 0;
 }
@@ -310,8 +312,8 @@ static void draw_run(Tab *t, int y, int x0, int x1)
 {
     if (!t || t != active() || !win || t->view) return;
     if (batching && y < DMAXROWS) {
-        if (x0 < dmin[y]) dmin[y] = (WORD)x0;
-        if (x1 > dmax[y]) dmax[y] = (WORD)x1;
+        if (x0 < dmin(y)) dmin(y) = (WORD)x0;
+        if (x1 > dmax(y)) dmax(y) = (WORD)x1;
         return;
     }
     draw_cells(y, t->ch + y * cols, t->at + y * cols, x0, x1);
@@ -325,8 +327,8 @@ static void damage_flush(Tab *t)
     if (t == active() && win && !t->view) {
         if (pend_scroll >= rows) {
             for (y = 0; y < rows && y < DMAXROWS; y++) {
-                dmin[y] = 0;
-                dmax[y] = (WORD)cols;
+                dmin(y) = 0;
+                dmax(y) = (WORD)cols;
             }
         } else if (pend_scroll > 0) {
             SetBPen(win->RPort, pen_bg(t->attr));
@@ -334,7 +336,7 @@ static void damage_flush(Tab *t)
                          term_top() + rows * chh - 1);
         }
         for (y = 0; y < rows && y < DMAXROWS; y++)
-            if (dmin[y] < dmax[y]) draw_cells(y, t->ch + y * cols, t->at + y * cols, dmin[y], dmax[y]);
+            if (dmin(y) < dmax(y)) draw_cells(y, t->ch + y * cols, t->at + y * cols, dmin(y), dmax(y));
     }
     damage_clear();
 }
@@ -639,8 +641,8 @@ static void scroll_up(Tab *t, int n)
         int y;
         pend_scroll += n;
         for (y = 0; y < rows; y++) {
-            dmin[y] = y + n < rows ? dmin[y + n] : 0;
-            dmax[y] = y + n < rows ? dmax[y + n] : (WORD)cols;
+            dmin(y) = y + n < rows ? dmin(y + n) : 0;
+            dmax(y) = y + n < rows ? dmax(y + n) : (WORD)cols;
         }
     } else if (t == active() && win && !t->view) {
         SetBPen(win->RPort, pen_bg(t->attr));
@@ -844,7 +846,7 @@ static void term_write(Tab *t, const UBYTE *s, long n)
     }
     if (t == active()) draw_cursor(t);          /* hide (complement) */
     damage_clear();
-    batching = 1;
+    batching = dmg != NULL;
     for (i = 0; i < n; i++) {
         UBYTE c = s[i];
         if (t->esc == 1) {
@@ -2091,6 +2093,7 @@ int term_main(const char *selfpath)
             dbgfh = Open((STRPTR)(strchr(b, ':') ? b : "T:AmiBash-term.log"), MODE_NEWFILE);
     }
     if (!open_libs()) return term_fail("needs gadtools.library and keymap.library V37");
+    dmg = AllocVec(2 * DMAXROWS * sizeof(WORD), MEMF_ANY);   /* without it, output is drawn at once */
     strncpy(self, selfpath, sizeof(self) - 1);
     if (FindPort((STRPTR)"AmiBash.Terminal")) {
         /* a terminal is already running: just open a tab there */
@@ -2304,6 +2307,8 @@ int term_main(const char *selfpath)
     if (dri) FreeScreenDrawInfo(scr, dri);
     FreeVec(tabs);
     tabs = NULL;
+    FreeVec(dmg);
+    dmg = NULL;
     /* the last shells have closed their handles, so they are past our
      * code; give them a moment to finish exiting before it is unloaded */
     Delay(10);
