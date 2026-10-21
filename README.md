@@ -167,8 +167,9 @@ use [AAText](https://aminet.net/package/util/wb/AAText) (free, Aminet
 so that every program, the terminal included, draws TrueType fonts
 anti-aliased on 15-bit and deeper RTG screens; fixed-width fonts keep
 their character cells, so the terminal grid stays exact. Install a
-monospaced TrueType font with AATextManager (or FTManager), e.g.
-`DejaVuSansMono.ttf` from `Fonts/`, and start AAText (`Run >NIL: C:AAText`
+monospaced TrueType font with AATextManager, FTManager or the supplied
+`InstallTTF` (Shell, no ReAction needed: `InstallTTF Fonts/DejaVuSansMono.ttf COPY`;
+see `contrib/installttf`), e.g. `DejaVuSansMono.ttf` from `Fonts/`, and start AAText (`Run >NIL: C:AAText`
 in `S:Startup-Sequence` before `LoadWB`). On an RTG screen the terminal
 then picks such a font by itself (DejaVu Sans Mono, JetBrains Mono,
 Liberation Mono, Ubuntu Mono, ... or any installed font with "Mono" in

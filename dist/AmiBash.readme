@@ -24,7 +24,9 @@ Amiga-+/- zoom the text: the supplied AmiBashMono font (DejaVu Sans Mono
 drawn for every size from 10 to 43 pixels) stays sharp at every step.
 On RTG screens it uses an installed monospaced TrueType font, which
 AAText (Aminet util/wb/AAText, OS 3.2) draws anti-aliased; install the
-included DejaVuSansMono.ttf with AATextManager.  AGA/ECS screens keep
+included DejaVuSansMono.ttf with AATextManager or, on systems
+without ReAction, with the included InstallTTF Shell tool
+("InstallTTF Fonts/DejaVuSansMono.ttf COPY").  AGA/ECS screens keep
 the AmiBashMono bitmap fonts.
 The program is pure (re-entrant), so the tabs share one copy of the code,
 and it can be made resident.
