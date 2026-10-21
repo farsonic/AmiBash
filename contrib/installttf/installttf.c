@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include "charsets.h"
 
-static const char version[] = "$VER: InstallTTF 1.1 (21.10.2026)";
+static const char version[] = "$VER: InstallTTF 1.2 (21.10.2026)";
 
 struct Library *DiskfontBase;
 struct GfxBase *GfxBase;
@@ -524,6 +524,7 @@ int main(void)
                        "                  [REPLACE] [INFO] [NOCHECK]\n");
         return RETURN_FAIL;
     }
+    Printf((STRPTR)"%s\n", (ULONG)(version + 6));
     DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
     GfxBase = (struct GfxBase *)OpenLibrary((STRPTR)"graphics.library", 36);
     memset(&o, 0, sizeof(o));

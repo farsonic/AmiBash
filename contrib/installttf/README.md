@@ -33,4 +33,8 @@ With `ENGINE=freetype2` no code page is written unless `CHARSET` asks for
 one: freetype2.library takes it from `ENV:ftcodepage`, and some versions of
 it hang on a code page in the .otag.
 
+When you reinstall a font that is already in use, run `Avail FLUSH` (or
+reboot) afterwards, so programs load the new version instead of the copy
+still in memory.
+
 Build: `make` (vbcc, NDK 3.2); `mkcharsets.py` regenerates `charsets.h`.
