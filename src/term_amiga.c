@@ -34,12 +34,17 @@
 #include <graphics/text.h>
 #include <graphics/rastport.h>
 #include <libraries/gadtools.h>
+#include <libraries/asl.h>
+#include <graphics/displayinfo.h>
+#include <diskfont/diskfont.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
 #include <proto/gadtools.h>
 #include <proto/keymap.h>
+#include <proto/diskfont.h>
+#include <proto/asl.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -53,6 +58,9 @@ extern struct GfxBase *GfxBase;
 extern struct IntuitionBase *IntuitionBase;
 struct Library *GadToolsBase;
 struct Library *KeymapBase;
+struct Library *AslBase;
+extern struct Library *DiskfontBase;
+struct TextFont *os_load_font(const char *fpath, int size);
 
 #define MAXTABS 9
 #define INQ 1024                 /* keyboard input queue per tab      */
@@ -936,6 +944,8 @@ static void expire_waits(void)
 
 static void tab_free(Tab *t);
 static void do_item(int item);
+static void zoom(int dir);
+static void font_requester(void);
 
 static void handle_packet(Tab *t, struct DosPacket *dp)
 {
@@ -1351,6 +1361,13 @@ static void key_event(struct IntuiMessage *im)
         if (im->Code >= 0x01 && im->Code <= 0x09) {       /* 1..9 */
             int s = visible_index(im->Code - 1);
             if (s >= 0) select_tab(s);
+        } else if (KeymapBase) {
+            /* Amiga-= (the + key without Shift) also makes text bigger */
+            memset(&ie, 0, sizeof(ie));
+            ie.ie_Class = IECLASS_RAWKEY;
+            ie.ie_Code = im->Code;
+            ie.ie_EventAddress = (APTR) * ((ULONG *)im->IAddress);
+            if (MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL) == 1 && buf[0] == '=') zoom(1);
         }
         return;
     }
@@ -1362,10 +1379,10 @@ static void key_event(struct IntuiMessage *im)
     if (q & IEQUALIFIER_LCOMMAND) {
         /* Left-Amiga works like Right-Amiga for the tab shortcuts (it is
          * where Command is on a Mac keyboard under an emulator) */
-        static const char keys[] = "tw\0[]\0q";
+        static const char keys[] = "tw\0[]\0+-0f\0q";
         n = MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL);
         if (n == 1 && buf[0]) {
-            const char *k = memchr(keys, buf[0] | 0x20, sizeof(keys) - 1);
+            const char *k = memchr(keys, buf[0] == '=' ? '+' : buf[0] | 0x20, sizeof(keys) - 1);
             if (k) do_item((int)(k - keys));
             else if (buf[0] >= '1' && buf[0] <= '9') {
                 int s = visible_index(buf[0] - '1');
@@ -1476,6 +1493,219 @@ static void click(int x, int y)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* fonts                                                                */
+
+static char font_path[160];      /* "FONTS:AmiBashMono.font"           */
+static UWORD font_sizes[40];     /* its designed sizes, ascending      */
+static int nsizes;               /* 0: scalable (outline) font         */
+static UWORD font_default;       /* size for Amiga-0                   */
+static struct TextFont *ownfont; /* opened by us, closed on change     */
+
+/* screens whose pixels are twice as tall as wide (non-interlaced) */
+static int tall_pixels(void)
+{
+    struct DisplayInfo di;
+    ULONG id = GetVPModeID(&scr->ViewPort);
+    if (id == INVALID_ID || !GetDisplayInfoData(NULL, (UBYTE *)&di, sizeof(di), DTAG_DISP, id)) return 0;
+    return di.Resolution.y >= di.Resolution.x * 3 / 2;
+}
+
+/* read the sizes listed in a .font file; 0 if it cannot be read */
+static int read_sizes(const char *path)
+{
+    BPTR fh = Open((STRPTR)path, MODE_OLDFILE);
+    UWORD hdr[2];
+    int i, n = 0;
+    if (!fh) return 0;
+    nsizes = 0;
+    if (Read(fh, hdr, 4) == 4 && (hdr[0] == FCH_ID || hdr[0] == TFCH_ID || hdr[0] == OFCH_ID)) {
+        n = 1;
+        for (i = 0; i < hdr[1] && nsizes < 40; i++) {
+            UBYTE e[260];
+            UWORD y;
+            int k;
+            if (Read(fh, e, sizeof(e)) != sizeof(e)) break;
+            y = (UWORD)((e[256] << 8) | e[257]);
+            if ((e[259] & FPF_REMOVED) || !y) continue;
+            for (k = nsizes; k > 0 && font_sizes[k - 1] > y; k--) font_sizes[k] = font_sizes[k - 1];
+            if (k > 0 && font_sizes[k - 1] == y) {        /* duplicate */
+                memmove(&font_sizes[k], &font_sizes[k + 1], (nsizes - k) * sizeof(UWORD));
+                continue;
+            }
+            font_sizes[k] = y;
+            nsizes++;
+        }
+    }
+    Close(fh);
+    return n;
+}
+
+/* find NAME.font in FONTS: or next to the program (PROGDIR:Fonts) */
+static int find_font(const char *name)
+{
+    static const char *const dirs[] = {"FONTS:", "PROGDIR:Fonts/"};
+    char p[160];
+    int i;
+    for (i = 0; i < 2; i++) {
+        sprintf(p, "%s%s.font", dirs[i], name);
+        if (read_sizes(p)) {
+            strcpy(font_path, p);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* use font_path at this size: resize the window to keep the columns
+ * and rows (like iTerm), as far as the screen allows */
+static int set_font(UWORD size, int save, int resize)
+{
+    struct TextAttr ta;
+    struct TextFont *f;
+    char v[200];
+    const char *fp;
+    LONG ww, wh, l, tp, ncw, nch;
+    if (!font_path[0]) return 0;
+    ta.ta_Name = (STRPTR)NEARP(font_path);
+    ta.ta_YSize = size;
+    ta.ta_Style = 0;
+    ta.ta_Flags = 0;
+    /* without diskfont.library, designed sizes can still be loaded */
+    f = DiskfontBase ? OpenDiskFont(&ta) : os_load_font(font_path, size);
+    if (!f) return 0;
+    if (f->tf_Flags & FPF_PROPORTIONAL) {       /* a terminal needs a grid */
+        CloseFont(f);
+        DisplayBeep(scr);
+        return 0;
+    }
+    if (win) {
+        SetFont(win->RPort, f);
+        font = f;
+        if (!resize) {
+            layout();
+            goto done;
+        }
+        ncw = f->tf_XSize;
+        nch = f->tf_YSize;
+        ww = win->Width - win->GZZWidth + cols * ncw;
+        wh = win->Height - win->GZZHeight + (nch + 6) + rows * nch;
+        if (ww > scr->Width) ww = scr->Width;
+        if (wh > scr->Height - scr->BarHeight - 1) wh = scr->Height - scr->BarHeight - 1;
+        l = win->LeftEdge;
+        tp = win->TopEdge;
+        if (l + ww > scr->Width) l = scr->Width - ww;
+        if (tp + wh > scr->Height) tp = scr->Height - wh;
+        ChangeWindowBox(win, l, tp, ww, wh);
+        layout();                                 /* NEWSIZE follows if it changed */
+    }
+done:
+    if (ownfont) CloseFont(ownfont);
+    ownfont = f;
+    font = f;
+    if (save) {
+        /* remembered for the next terminal (ENV: and ENVARC:) */
+        fp = FilePart((STRPTR)NEARP(font_path));
+        sprintf(v, "%.*s/%d", (int)(strlen(fp) - 5), fp, (int)size);
+        SetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), -1, GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
+    }
+    return 1;
+}
+
+/* the designed size nearest below about 50 lines on the screen */
+static UWORD pick_default(void)
+{
+    int i, want = scr->Height / 50;
+    UWORD d = nsizes ? font_sizes[0] : (UWORD)want;
+    for (i = 0; i < nsizes; i++)
+        if (font_sizes[i] <= want) d = font_sizes[i];
+    return d;
+}
+
+/* the font to start with: $AMIBASH_FONT ("name/size"), else AmiBashMono
+ * (its tall-pixel cut on non-interlaced screens) at a size that suits
+ * the screen, else the system font */
+static void choose_font(void)
+{
+    const char *fam = tall_pixels() ? "AmiBashMonoNL" : "AmiBashMono";
+    char v[100], *sl;
+    UWORD size = 0;
+    if (GetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), sizeof(v), 0) > 0 && (sl = strchr(v, '/')) != NULL) {
+        *sl = 0;
+        if (find_font(v)) size = (UWORD)atoi(sl + 1);
+    }
+    if (!size && !find_font(fam)) return;         /* keep the system font */
+    font_default = pick_default();
+    if (set_font(size ? size : font_default, 0, 0)) return;
+    if (find_font(fam)) {
+        font_default = pick_default();
+        set_font(font_default, 0, 0);
+    }
+}
+
+/* Amiga-+ / Amiga-- / Amiga-0: the next designed size up or down */
+static void zoom(int dir)
+{
+    UWORD cur_size = font ? font->tf_YSize : 8, size = cur_size;
+    int i;
+    if (!font_path[0]) {
+        /* system font: zoom within its family */
+        struct TextFont *f = font;
+        char p[64];
+        if (!f) return;
+        sprintf(p, "%.50s", f->tf_Message.mn_Node.ln_Name);
+        if (strlen(p) > 5 && !strcmp(p + strlen(p) - 5, ".font")) p[strlen(p) - 5] = 0;
+        if (!find_font(p)) return;
+        font_default = cur_size;
+    }
+    if (dir == 0) size = font_default;
+    else if (nsizes) {
+        if (dir > 0) {
+            for (i = 0; i < nsizes; i++)
+                if (font_sizes[i] > cur_size) {
+                    size = font_sizes[i];
+                    break;
+                }
+        } else {
+            for (i = nsizes - 1; i >= 0; i--)
+                if (font_sizes[i] < cur_size) {
+                    size = font_sizes[i];
+                    break;
+                }
+        }
+    } else {
+        size = (UWORD)(cur_size + dir * (cur_size >= 16 ? 2 : 1));   /* outline font */
+        if (size < 6) size = 6;
+        if (size > 72) size = 72;
+    }
+    if (size == cur_size || !set_font(size, 1, 1)) DisplayBeep(scr);
+}
+
+/* "Font...": the ASL font requester, fixed-width fonts only */
+static void font_requester(void)
+{
+    struct FontRequester *fr;
+    char name[64];
+    if (!AslBase || !win) {
+        DisplayBeep(scr);
+        return;
+    }
+    fr = AllocAslRequestTags(ASL_FontRequest, ASLFO_Window, (ULONG)win, ASLFO_TitleText,
+                             (ULONG)"Terminal font", ASLFO_FixedWidthOnly, TRUE, ASLFO_MaxHeight, 64,
+                             ASLFO_InitialName, (ULONG)(font ? font->tf_Message.mn_Node.ln_Name : "topaz.font"),
+                             ASLFO_InitialSize, font ? font->tf_YSize : 8, TAG_END);
+    if (!fr) return;
+    if (AslRequest(fr, NULL)) {
+        sprintf(name, "%.50s", fr->fo_Attr.ta_Name);
+        if (strlen(name) > 5 && !strcmp(name + strlen(name) - 5, ".font")) name[strlen(name) - 5] = 0;
+        if (find_font(name)) {
+            font_default = fr->fo_Attr.ta_YSize;
+            if (!set_font(fr->fo_Attr.ta_YSize, 1, 1)) DisplayBeep(scr);
+        }
+    }
+    FreeAslRequest(fr);
+}
+
 static struct NewMenu nm[] = {
     {NM_TITLE, (STRPTR)"Terminal", 0, 0, 0, 0},
     {NM_ITEM, (STRPTR)"New Tab", (STRPTR)"T", 0, 0, 0},
@@ -1483,6 +1713,11 @@ static struct NewMenu nm[] = {
     {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
     {NM_ITEM, (STRPTR)"Previous Tab", (STRPTR)"[", 0, 0, 0},
     {NM_ITEM, (STRPTR)"Next Tab", (STRPTR)"]", 0, 0, 0},
+    {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
+    {NM_ITEM, (STRPTR)"Bigger Text", (STRPTR)"+", 0, 0, 0},
+    {NM_ITEM, (STRPTR)"Smaller Text", (STRPTR)"-", 0, 0, 0},
+    {NM_ITEM, (STRPTR)"Default Size", (STRPTR)"0", 0, 0, 0},
+    {NM_ITEM, (STRPTR)"Font...", (STRPTR)"F", 0, 0, 0},
     {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
     {NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, 0},
     {NM_END, 0, 0, 0, 0, 0}
@@ -1496,7 +1731,11 @@ static void do_item(int item)
     case 1: if (cur >= 0) close_tab(cur); break;
     case 3: step_tab(-1); break;
     case 4: step_tab(1); break;
-    case 6: quitting = 1; break;
+    case 6: zoom(1); break;
+    case 7: zoom(-1); break;
+    case 8: zoom(0); break;
+    case 9: font_requester(); break;
+    case 11: quitting = 1; break;
     }
 }
 
@@ -1569,6 +1808,8 @@ static int open_libs(void)
     if (!GfxBase) GfxBase = (struct GfxBase *)OpenLibrary((STRPTR)"graphics.library", 37);
     if (!GadToolsBase) GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 37);
     if (!KeymapBase) KeymapBase = OpenLibrary((STRPTR)"keymap.library", 37);
+    if (!DiskfontBase) DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
+    if (!AslBase) AslBase = OpenLibrary((STRPTR)"asl.library", 38);     /* optional */
     return IntuitionBase && GfxBase && GadToolsBase && KeymapBase;
 }
 
@@ -1610,7 +1851,8 @@ int term_main(const char *selfpath)
     if (!scr) return term_fail("cannot lock the screen");
     dri = GetScreenDrawInfo(scr);
     vi = GetVisualInfo(scr, TAG_END);
-    /* fixed-width system font (Prefs/Font "System default text") */
+    /* fixed-width system font (Prefs/Font "System default text") until
+     * choose_font() finds a better one */
     ta.ta_Name = GfxBase->DefaultFont->tf_Message.mn_Node.ln_Name;
     ta.ta_YSize = GfxBase->DefaultFont->tf_YSize;
     ta.ta_Style = 0;
@@ -1650,6 +1892,7 @@ int term_main(const char *selfpath)
         return term_fail("cannot open the window (out of memory?)");
     }
     SetFont(win->RPort, font);
+    choose_font();
     menus = CreateMenus(nm, TAG_END);
     if (menus && LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_END)) SetMenuStrip(win, menus);
     pubport = CreateMsgPort();
@@ -1798,6 +2041,7 @@ int term_main(const char *selfpath)
     if (menus) FreeMenus(menus);
     if (vi) FreeVisualInfo(vi);
     free_scroller();
+    if (ownfont) CloseFont(ownfont);
     if (dri) FreeScreenDrawInfo(scr, dri);
     FreeVec(tabs);
     tabs = NULL;

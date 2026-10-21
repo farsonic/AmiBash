@@ -20,6 +20,8 @@ ReadArgs() quoting, Ctrl-C works, return codes become $?.
 Double-click it on Workbench (or type "bash --term") for the AmiBash
 Terminal: a window with tabs, each running its own bash.  Amiga-T or the
 "+" opens a tab, Amiga-W or a tab's "x" closes it, Amiga-1..9 switches.
+Amiga-+/- zoom the text: the supplied AmiBashMono font (DejaVu Sans Mono
+drawn for every size from 10 to 43 pixels) stays sharp at every step.
 The program is pure (re-entrant), so the tabs share one copy of the code,
 and it can be made resident.
 
@@ -28,6 +30,7 @@ runs on 68000 with 1 MB (bash) or 68020+ (bash020).
 
 Install:  Copy bash TO C:        (or bash020 AS C:bash on 68020+)
           Copy S/bashrc TO S:    (optional)
+          Copy Fonts/#? TO FONTS: ALL   (terminal font)
           then type "bash" in a Shell window, or "bash --term"
           (Workbench: copy bash and bash.info to a drawer).
 

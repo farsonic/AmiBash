@@ -142,10 +142,27 @@ use the new `bash.info`, or put that tool type in brackets.
 | **Amiga-1** … **Amiga-9**, or click a tab | go to that tab |
 | **Amiga-[** / **Amiga-]**, or `bashwin -n` | previous / next tab |
 | **Amiga-Q** or the close gadget | close all tabs and the window |
+| **Amiga-+** / **Amiga--** / **Amiga-0** | bigger / smaller text, default size |
+| **Amiga-F** | choose the font (ASL requester, fixed-width fonts) |
 | scroller, mouse wheel, **Shift-Up** / **Shift-Down** | scroll back through earlier output (a page at a time with Shift); typing returns to the bottom |
 
 The shortcuts work with either Amiga key and are also in the *Terminal*
-menu. Each tab keeps the last 300 lines that scrolled off the top; set
+menu. **Fonts.** The terminal uses *AmiBashMono*, supplied in `Fonts/`: DejaVu
+Sans Mono drawn separately for every size from 10 to 43 pixels, using the
+font's hinting, so text is sharp at every step instead of being a scaled
+bitmap. On screens with tall pixels (non-interlaced PAL/NTSC hires) it
+picks *AmiBashMonoNL*, the same font drawn for that pixel shape. Copy
+`Fonts/#?` to `FONTS:` (or keep the `Fonts` drawer next to `bash`).
+**Amiga-+** and **Amiga--** step through the sizes; the window grows or
+shrinks to keep its columns and rows, as far as the screen allows. The
+choice is saved (`ENVARC:AMIBASH_FONT`, e.g. `AmiBashMono/19`) and used
+next time; any fixed-width font works, including outline fonts, which
+can be any size. OS 3.x cannot anti-alias text, but on a high-resolution
+RTG screen the larger sizes look much like a Mac terminal.
+`tools/ttf2amigafont.py` makes such a family from any monospaced
+TrueType font.
+
+Each tab keeps the last 300 lines that scrolled off the top; set
 `AMIBASH_SCROLLBACK` (e.g. `setenv AMIBASH_SCROLLBACK 1000`, or 0 for none)
 before starting the terminal to change that. While you are scrolled back
 the view stays put as new output arrives. A tab's title (and the window's) follows its current directory. The

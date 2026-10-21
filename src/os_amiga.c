@@ -1139,20 +1139,26 @@ int os_console_getfont(char *name, int nsz, int *size)
 /* Without diskfont.library (e.g. a bare ROM boot) load FONTS:name/size
  * ourselves: the file is a load module holding a DiskFontHeader right
  * after the next-segment pointer and a 4-byte return code. */
-static struct TextFont *load_font_file(const char *fname, int size)
+struct TextFont *os_load_font(const char *fpath, int size)
 {
-    char path[128];
-    char base[64];
+    char path[200];
     BPTR seg;
     struct DiskFontHeader *dfh;
     struct TextFont *tf;
     char *nm;
+    const char *fname = (const char *)FilePart((STRPTR)fpath);
     struct TextAttr ta;
-    size_t bl = strlen(fname) - 5;      /* strip ".font" */
-    if (bl >= sizeof(base)) return NULL;
-    memcpy(base, fname, bl);
-    base[bl] = 0;
-    sprintf(path, "FONTS:%s/%d", base, size);
+    size_t bl = strlen(fpath);
+    if (bl < 6 || bl > 150) return NULL;
+    bl -= 5;                            /* strip ".font" */
+    ta.ta_Name = (STRPTR)fname;
+    ta.ta_YSize = (UWORD)size;
+    ta.ta_Style = 0;
+    ta.ta_Flags = 0;
+    tf = OpenFont(&ta);                 /* loaded before? */
+    if (tf && tf->tf_YSize == size) return tf;
+    if (tf) CloseFont(tf);
+    sprintf(path, "%s%.*s/%d", strchr(fpath, ':') ? "" : "FONTS:", (int)bl, fpath, size);
     seg = LoadSeg((STRPTR)path);
     if (!seg) {
         last_err = IoErr();
@@ -1174,10 +1180,6 @@ static struct TextFont *load_font_file(const char *fname, int size)
     tf->tf_Message.mn_Node.ln_Name = (STRPTR)nm;
     tf->tf_Message.mn_Node.ln_Type = NT_FONT;
     AddFont(tf);                        /* stays loaded for the session */
-    ta.ta_Name = (STRPTR)fname;
-    ta.ta_YSize = (UWORD)size;
-    ta.ta_Style = 0;
-    ta.ta_Flags = 0;
     return OpenFont(&ta);
 }
 
@@ -1202,7 +1204,7 @@ int os_console_setfont(const char *name, int size)
     if (!DiskfontBase) DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
     if (DiskfontBase) f = OpenDiskFont(&ta);
     if (!f) f = OpenFont(&ta);
-    if (!f) f = load_font_file(fname, size);
+    if (!f) f = os_load_font(fname, size);
     if (!f) {
         if (!last_err) last_err = ERROR_OBJECT_NOT_FOUND;
         return -1;
