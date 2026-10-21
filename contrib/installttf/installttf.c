@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include "charsets.h"
 
-static const char version[] = "$VER: InstallTTF 1.0 (21.10.2026)";
+static const char version[] = "$VER: InstallTTF 1.1 (21.10.2026)";
 
 struct Library *DiskfontBase;
 struct GfxBase *GfxBase;
@@ -456,7 +456,10 @@ static int install(const char *path, ULONG face, struct Opts *o, ULONG *nfaces)
     ot_val(ot, OT_StemWeight, stem_weight(f.weight));
     ot_val(ot, OT_SlantStyle, f.italic ? OTS_Italic : OTS_Upright);
     ot_val(ot, OT_HorizStyle, OTH_Normal);
-    ot_val(ot, OT_SpaceFactor, 0x10000);
+    /* the space's width as a fraction of the em (16.16): 3.x diskfont makes
+     * a fixed-width font's cells this times the pixel height wide, so 1.0
+     * gives square cells (AATextManager's "fixed width cells too wide") */
+    ot_val(ot, OT_SpaceFactor, (ULONG)(((ULONG)f.space_adv << 16) / f.upem));
     ot_val(ot, OT_InhibitAlgoStyle, f.italic ? 7 : 3);
     ot_val(ot, OT_SpecCount, cs >= 0 ? 5 : 4);
     ot_str(ot, OT_Spec1 | OT_Indirect, fontfile);                        /* the font file */
