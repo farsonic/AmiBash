@@ -7,3 +7,8 @@ dist/AmiBash.lha
 emu/dh0/*.uaem
 emu/dh0/term.log
 dist/*.zip
+emu/dh0/Libs/
+emu/dh0/ENV/
+emu/envdir/
+emu/dh0/Fonts/AmiBashMono*
+emu/dh0/Fonts/DejaVuSansMono.ttf

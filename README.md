@@ -162,6 +162,22 @@ RTG screen the larger sizes look much like a Mac terminal.
 `tools/ttf2amigafont.py` makes such a family from any monospaced
 TrueType font.
 
+**TrueType.** If [ttengine.library](https://aminet.net/package/util/libs/ttengine)
+(free, Aminet `util/libs/ttengine`; 68020+) is installed, the terminal
+draws TrueType fonts itself, anti-aliased on 15-bit and deeper RTG
+screens (Picasso96 / CyberGraphX) - the closest to a Mac terminal. Any
+pixel size works, so Amiga-+/- zoom in single steps. On such a screen it
+uses `DejaVuSansMono.ttf` (supplied in `Fonts/`) by default when it finds
+it in `PROGDIR:Fonts`, `FONTS:`, `FONTS:_TrueType` or `FONTS:TrueType`,
+or "DejaVu Sans Mono" from ttengine's font database. *Terminal >
+TrueType Font...* opens ttengine's requester (monospaced fonts only);
+`setenv AMIBASH_FONT Work:Fonts/MyMono.ttf/18` picks a file directly.
+Bold is drawn by overprinting, colours are the 16 standard ANSI colours
+(exact pens on RTG and 8-bit screens, the nearest on 4-colour ones).
+ttengine needs `locale.library`, `mathieeesingtrans.library` and
+`cybergraphics.library` (Picasso96 provides one), all standard on a
+3.x RTG system.
+
 Each tab keeps the last 300 lines that scrolled off the top; set
 `AMIBASH_SCROLLBACK` (e.g. `setenv AMIBASH_SCROLLBACK 1000`, or 0 for none)
 before starting the terminal to change that. While you are scrolled back

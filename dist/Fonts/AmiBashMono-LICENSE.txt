@@ -1,5 +1,6 @@
-AmiBashMono and AmiBashMonoNL are bitmap renderings of DejaVu Sans Mono
-(https://dejavu-fonts.github.io/), made with tools/ttf2amigafont.py.
+DejaVuSansMono.ttf is DejaVu Sans Mono (https://dejavu-fonts.github.io/), unmodified.
+AmiBashMono and AmiBashMonoNL are bitmap renderings of it, made with
+tools/ttf2amigafont.py.
 
 Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. 
 Bitstream Vera is a trademark of Bitstream, Inc.

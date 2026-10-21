@@ -3,7 +3,12 @@
 
 # Prompt: bold user@host, then the current directory (pen 3 = blue on the
 # default Workbench palette).  \w shows ~ for $HOME.
-PS1='\[\e[1m\]\u@\h\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
+# (in the AmiBash Terminal colours are real ANSI colours: 34 is blue)
+if [ -n "$AMIBASH_TERM" ]; then
+    PS1='\[\e[1m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+else
+    PS1='\[\e[1m\]\u@\h\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
+fi
 
 # Where "cd" with no arguments goes, and where history is kept.
 # HOME=SYS:Home        # uncomment (and MakeDir SYS:Home) for a home directory

@@ -159,7 +159,8 @@ static void ls_sort(LsEnt **v, int n, LsOpt *o)
 
 static const char *ls_color(const LsEnt *e)
 {
-    if (e->type == OS_T_DIR) return "\033[1;33m";
+    /* 33 is pen 3 (blue) in the console; real ANSI blue in the terminal */
+    if (e->type == OS_T_DIR) return var_get("AMIBASH_TERM") ? "\033[1;34m" : "\033[1;33m";
     if (e->type == OS_T_VOL) return "\033[1;32m";
     if (e->type == OS_T_LINK) return "\033[36m";
     if (is_exec(e->name, e->type, e->prot)) return "\033[1;31m";

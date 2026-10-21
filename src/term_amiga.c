@@ -45,6 +45,7 @@
 #include <proto/keymap.h>
 #include <proto/diskfont.h>
 #include <proto/asl.h>
+#include <proto/utility.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -73,6 +74,8 @@ struct TextFont *os_load_font(const char *fpath, int size);
 #define A_ULINE   0x80
 #define A_ITAL    0x100
 #define A_INV     0x200
+#define A_DEFFG   0x400          /* theme text colour, not ANSI fg     */
+#define A_DEFBG   0x800          /* theme background                   */
 
 typedef struct PktNode { struct DosPacket *dp; long deadline; struct PktNode *next; } PktNode;
 
@@ -133,6 +136,8 @@ static int timer_busy;
 static char self[256];
 static UWORD def_attr;           /* fg/bg of the theme                 */
 static int pen_text = 2, pen_back = 1, pen_hi = 3;
+static LONG ansipen[16];         /* ANSI colours 0-7, bright 8-15      */
+static int pens_obtained;
 
 /* tab bar geometry */
 static int plus_w;
@@ -145,6 +150,54 @@ static int sb_dirty;             /* prop needs updating                */
 static int sb_held;              /* arrow held down: -1 up, +1 down    */
 static LONG sb_settop = -1;      /* last top we set                    */
 static int launched;             /* shells started successfully          */
+
+/* ------------------------------------------------------------------ */
+/* TrueType text through ttengine.library (Aminet util/libs/ttengine),  */
+/* used when it is installed.  vbcc has no inline header for it, so the */
+/* calls are declared here (offsets from ttengine_lib.sfd).             */
+
+struct Library *TTEngineBase;
+struct Library *UtilityBase;
+#define TT_FontFile         0x6EDA0000
+#define TT_FamilyTable      0x6EDA0002
+#define TT_FontSize         0x6EDA0003
+#define TT_Window           0x6EDA0007
+#define TT_Antialias        0x6EDA000F
+#define TT_Antialias_Off    1
+#define TT_Antialias_On     2
+#define TT_Encoding         0x6EDA0010
+#define TT_Encoding_ISO8859_1 4
+#define TT_FontBaseline     0x6EDA001E
+#define TT_FontFixedWidth   0x6EDA0026
+#define TT_FontHeight       0x6EDA0027
+#define TT_FontWidth        0x6EDA0028
+#define TT_DiskFontMetrics  0x6EDA0029
+#define TTRQ_Window         0x6EDA2000
+#define TTRQ_TitleText      0x6EDA2004
+#define TTRQ_DoSizes        0x6EDA200B
+#define TTRQ_InitialSize    0x6EDA200F
+#define TTRQ_DoPreview      0x6EDA2012
+#define TTRQ_FixedWidthOnly 0x6EDA2013
+
+APTR tt_OpenFontA(__reg("a6") struct Library *, __reg("a0") struct TagItem *) = "\tjsr\t-30(a6)";
+BOOL tt_SetFont(__reg("a6") struct Library *, __reg("a1") struct RastPort *, __reg("a0") APTR) = "\tjsr\t-36(a6)";
+VOID tt_CloseFont(__reg("a6") struct Library *, __reg("a0") APTR) = "\tjsr\t-42(a6)";
+VOID tt_Text(__reg("a6") struct Library *, __reg("a1") struct RastPort *, __reg("a0") APTR,
+             __reg("d0") ULONG) = "\tjsr\t-48(a6)";
+ULONG tt_SetAttrsA(__reg("a6") struct Library *, __reg("a1") struct RastPort *,
+                   __reg("a0") struct TagItem *) = "\tjsr\t-54(a6)";
+ULONG tt_GetAttrsA(__reg("a6") struct Library *, __reg("a1") struct RastPort *,
+                   __reg("a0") struct TagItem *) = "\tjsr\t-60(a6)";
+VOID tt_DoneRastPort(__reg("a6") struct Library *, __reg("a1") struct RastPort *) = "\tjsr\t-96(a6)";
+APTR tt_AllocRequest(__reg("a6") struct Library *) = "\tjsr\t-102(a6)";
+struct TagItem *tt_RequestA(__reg("a6") struct Library *, __reg("a0") APTR,
+                            __reg("a1") struct TagItem *) = "\tjsr\t-108(a6)";
+VOID tt_FreeRequest(__reg("a6") struct Library *, __reg("a0") APTR) = "\tjsr\t-114(a6)";
+
+static APTR ttfont;              /* TrueType font in use, or NULL      */
+static char tt_spec[200];        /* its file, or "tt:" + family name   */
+static int tt_size, tt_default;
+static int tt_cw, tt_chh, tt_base;
 
 /* ------------------------------------------------------------------ */
 /* small helpers                                                        */
@@ -179,18 +232,70 @@ static int term_top(void)
 /* ------------------------------------------------------------------ */
 /* drawing                                                              */
 
+/* pens for an attribute: the theme's, or the ANSI colour (bold: the
+ * bright one) */
+static LONG pen_fg(UWORD a)
+{
+    if (a & A_DEFFG) return pen_text;
+    return ansipen[A_FG(a) + ((a & A_BOLD) ? 8 : 0)];
+}
+
+static LONG pen_bg(UWORD a)
+{
+    return (a & A_DEFBG) ? pen_back : ansipen[A_BG(a)];
+}
+
 static void set_pens(UWORD a)
 {
-    int fg = A_FG(a), bg = A_BG(a);
+    LONG fg = pen_fg(a), bg = pen_bg(a);
     if (a & A_INV) {
-        int t = fg;
+        LONG t = fg;
         fg = bg;
         bg = t;
     }
-    if ((a & A_BOLD) && fg == 1) fg = 2;      /* bold on dark: bright */
     SetAPen(win->RPort, fg);
     SetBPen(win->RPort, bg);
     SetDrMd(win->RPort, JAM2);
+}
+
+/* the 16 ANSI colours: exact pens where the screen has free ones (RTG,
+ * 8-bit Workbench), else the nearest - but never the background */
+static void obtain_pens(void)
+{
+    static const ULONG rgb[16] = {
+        0x000000, 0xcd3131, 0x0dbc79, 0xe5e510, 0x3b78ff, 0xbc3fbc, 0x11a8cd, 0xe5e5e5,
+        0x666666, 0xf14c4c, 0x23d18b, 0xf5f543, 0x5c9dff, 0xd670d6, 0x29b8db, 0xffffff};
+    struct TagItem tg[2];
+    int i;
+    tg[0].ti_Tag = OBP_Precision;
+    tg[0].ti_Data = PRECISION_IMAGE;
+    tg[1].ti_Tag = TAG_END;
+    for (i = 0; i < 16; i++) {
+        ULONG c = rgb[i];
+        LONG p = -1;
+        if (GfxBase->LibNode.lib_Version >= 39)
+            p = ObtainBestPenA(scr->ViewPort.ColorMap, ((c >> 16) & 255) * 0x01010101UL,
+                               ((c >> 8) & 255) * 0x01010101UL, (c & 255) * 0x01010101UL, tg);
+        if (p >= 0) pens_obtained |= 1 << i;
+        else p = i == 0 ? pen_back : (i == 7 || i >= 8) ? pen_text : pen_hi;
+        if (p == pen_back && i != 0) p = (i == 4 || i == 12) ? pen_hi : pen_text;
+        ansipen[i] = p;
+    }
+}
+
+static void release_pens(void)
+{
+    int i;
+    for (i = 0; i < 16; i++)
+        if (pens_obtained & (1 << i)) ReleasePen(scr->ViewPort.ColorMap, ansipen[i]);
+    pens_obtained = 0;
+}
+
+/* Text() in the terminal's font, bitmap or TrueType */
+static void txt(struct RastPort *r, const char *s, int n)
+{
+    if (ttfont) tt_Text(TTEngineBase, r, (APTR)s, (ULONG)n);
+    else Text(r, (STRPTR)s, n);
 }
 
 /* draw cells [x0, x1) of the line c/a at display row y */
@@ -203,12 +308,12 @@ static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
         while (x < x1 && at[x] == a) x++;
         set_pens(a);
         Move(win->RPort, s * cw, term_top() + y * chh + base);
-        Text(win->RPort, (STRPTR)&c[s], x - s);
+        txt(win->RPort, (const char *)&c[s], x - s);
         /* bold and underline drawn by hand (no algorithmic soft styles) */
         if (a & A_BOLD) {
             SetDrMd(win->RPort, JAM1);
             Move(win->RPort, s * cw + 1, term_top() + y * chh + base);
-            Text(win->RPort, (STRPTR)&c[s], x - s);
+            txt(win->RPort, (const char *)&c[s], x - s);
             SetDrMd(win->RPort, JAM2);
         }
         if (a & A_ULINE) {
@@ -257,7 +362,7 @@ static void redraw_tab(Tab *t)
 {
     int y;
     if (!t || !win) return;
-    SetAPen(win->RPort, A_BG(def_attr));
+    SetAPen(win->RPort, pen_back);
     RectFill(win->RPort, 0, term_top(), win->GZZWidth - 1, win->GZZHeight - 1);
     for (y = 0; y < rows; y++) {
         UBYTE *c;
@@ -324,7 +429,7 @@ static void scroll_view(Tab *t, int n)
     if (n < rows && -n < rows) {
         /* move what is shown and draw only the lines that come in */
         int y, y0 = n > 0 ? 0 : rows + n, y1 = n > 0 ? n : rows;
-        SetBPen(win->RPort, A_BG(def_attr));
+        SetBPen(win->RPort, pen_back);
         ScrollRaster(win->RPort, 0, -n * chh, 0, term_top(), cols * cw - 1, term_top() + rows * chh - 1);
         for (y = y0; y < y1; y++) {
             UBYTE *c;
@@ -446,7 +551,7 @@ static void draw_tabbar(void)
         x0 = x;
         x1 = x + w - 1;
         /* active tab: filled like the terminal, others raised */
-        SetAPen(rp, i == cur ? A_BG(def_attr) : (dri ? dri->dri_Pens[BACKGROUNDPEN] : 0));
+        SetAPen(rp, i == cur ? pen_back : (dri ? dri->dri_Pens[BACKGROUNDPEN] : 0));
         RectFill(rp, x0, 1, x1, tabh - 1);
         SetAPen(rp, dri ? dri->dri_Pens[SHINEPEN] : 2);
         Move(rp, x0, tabh - 1);
@@ -460,20 +565,20 @@ static void draw_tabbar(void)
         }
         /* close box "x" at the left, shortcut at the right */
         SetAPen(rp, i == cur ? pen_text : (dri ? dri->dri_Pens[TEXTPEN] : 1));
-        SetBPen(rp, i == cur ? A_BG(def_attr) : (dri ? dri->dri_Pens[BACKGROUNDPEN] : 0));
+        SetBPen(rp, i == cur ? pen_back : (dri ? dri->dri_Pens[BACKGROUNDPEN] : 0));
         SetDrMd(rp, JAM2);
         Move(rp, x0 + 4, 3 + base);
-        Text(rp, (STRPTR)"x", 1);
+        txt(rp, "x", 1);
         sprintf(label, "A%d", k);
         Move(rp, x1 - 4 - 2 * cw, 3 + base);
-        Text(rp, (STRPTR)label, 2);
+        txt(rp, label, 2);
         /* title, centred */
         maxc = (w - 8 * cw) / cw;
         len = (int)strlen(t->title);
         if (len > maxc) len = maxc > 0 ? maxc : 0;
         tw = len * cw;
         Move(rp, x0 + (w - tw) / 2, 3 + base);
-        if (len) Text(rp, (STRPTR)t->title, len);
+        if (len) txt(rp, t->title, len);
         x += w;
     }
     /* "+" button */
@@ -487,7 +592,7 @@ static void draw_tabbar(void)
     SetAPen(rp, dri ? dri->dri_Pens[TEXTPEN] : 1);
     SetBPen(rp, dri ? dri->dri_Pens[BACKGROUNDPEN] : 0);
     Move(rp, x + (W - x - cw) / 2, 3 + base);
-    Text(rp, (STRPTR)"+", 1);
+    txt(rp, "+", 1);
 }
 
 static void update_title(void)
@@ -507,8 +612,7 @@ static void clear_cells(Tab *t, int from, int to)
     int i;
     for (i = from; i < to; i++) {
         t->ch[i] = ' ';
-        t->at[i] = (UWORD)(t->attr & 0x3F & ~0x07) | A_FG(def_attr);
-        t->at[i] = (UWORD)((def_attr & 0x07) | (t->attr & 0x38));
+        t->at[i] = (UWORD)(A_DEFFG | (t->attr & (0x38 | A_DEFBG)));
     }
 }
 
@@ -522,7 +626,7 @@ static void scroll_up(Tab *t, int n)
     memmove(t->at, t->at + n * cols, (rows - n) * cols * sizeof(UWORD));
     clear_cells(t, (rows - n) * cols, rows * cols);
     if (t == active() && win && !t->view) {
-        SetBPen(win->RPort, A_BG(t->attr));
+        SetBPen(win->RPort, pen_bg(t->attr));
         ScrollRaster(win->RPort, 0, n * chh, 0, term_top(), cols * cw - 1, term_top() + rows * chh - 1);
         if (win->GZZWidth > cols * cw || 1) {
             /* ScrollRaster fills with BPen; repaint the new lines */
@@ -590,11 +694,11 @@ static void sgr(Tab *t)
         else if (v == 23) t->attr &= ~A_ITAL;
         else if (v == 24) t->attr &= ~A_ULINE;
         else if (v == 27) t->attr &= ~A_INV;
-        else if (v >= 30 && v <= 37) t->attr = (UWORD)((t->attr & ~7) | (v - 30));
-        else if (v == 39) t->attr = (UWORD)((t->attr & ~7) | A_FG(def_attr));
-        else if (v >= 40 && v <= 47) t->attr = (UWORD)((t->attr & ~0x38) | ((v - 40) << 3));
-        else if (v == 49) t->attr = (UWORD)((t->attr & ~0x38) | (def_attr & 0x38));
-        else if (v >= 90 && v <= 97) t->attr = (UWORD)((t->attr & ~7) | (v - 90)) | A_BOLD;
+        else if (v >= 30 && v <= 37) t->attr = (UWORD)((t->attr & ~(7 | A_DEFFG)) | (v - 30));
+        else if (v == 39) t->attr = (UWORD)((t->attr & ~7) | A_DEFFG);
+        else if (v >= 40 && v <= 47) t->attr = (UWORD)((t->attr & ~(0x38 | A_DEFBG)) | ((v - 40) << 3));
+        else if (v == 49) t->attr = (UWORD)((t->attr & ~0x38) | A_DEFBG);
+        else if (v >= 90 && v <= 97) t->attr = (UWORD)((t->attr & ~(7 | A_DEFFG)) | (v - 90)) | A_BOLD;
     }
 }
 
@@ -946,6 +1050,8 @@ static void tab_free(Tab *t);
 static void do_item(int item);
 static void zoom(int dir);
 static void font_requester(void);
+static void tt_requester(void);
+static void drop_tt(void);
 
 static void handle_packet(Tab *t, struct DosPacket *dp)
 {
@@ -1379,7 +1485,7 @@ static void key_event(struct IntuiMessage *im)
     if (q & IEQUALIFIER_LCOMMAND) {
         /* Left-Amiga works like Right-Amiga for the tab shortcuts (it is
          * where Command is on a Mac keyboard under an emulator) */
-        static const char keys[] = "tw\0[]\0+-0f\0q";
+        static const char keys[] = "tw\0[]\0+-0f\0\0q";
         n = MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL);
         if (n == 1 && buf[0]) {
             const char *k = memchr(keys, buf[0] == '=' ? '+' : buf[0] | 0x20, sizeof(keys) - 1);
@@ -1417,9 +1523,15 @@ static void layout(void)
     int i, ncols, nrows;
     struct TextFont *f = win->RPort->Font;
     if (f != font) font = f;
-    cw = font->tf_XSize;
-    chh = font->tf_YSize;
-    base = font->tf_Baseline;
+    if (ttfont) {
+        cw = tt_cw;
+        chh = tt_chh;
+        base = tt_base;
+    } else {
+        cw = font->tf_XSize;
+        chh = font->tf_YSize;
+        base = font->tf_Baseline;
+    }
     tabh = chh + 6;
     ncols = win->GZZWidth / cw;
     nrows = (win->GZZHeight - tabh) / chh;
@@ -1466,7 +1578,7 @@ static void layout(void)
     draw_tabbar();
     if (active()) redraw_tab(active());
     else {
-        SetAPen(win->RPort, A_BG(def_attr));
+        SetAPen(win->RPort, pen_back);
         RectFill(win->RPort, 0, tabh, win->GZZWidth - 1, win->GZZHeight - 1);
     }
 }
@@ -1557,15 +1669,50 @@ static int find_font(const char *name)
     return 0;
 }
 
-/* use font_path at this size: resize the window to keep the columns
- * and rows (like iTerm), as far as the screen allows */
+/* after a font change: resize the window to keep the columns and rows
+ * (like iTerm), as far as the screen allows */
+static void fit_window(LONG ncw, LONG nch, int resize)
+{
+    LONG ww, wh, l, tp;
+    if (!resize) {
+        layout();
+        return;
+    }
+    ww = win->Width - win->GZZWidth + cols * ncw;
+    wh = win->Height - win->GZZHeight + (nch + 6) + rows * nch;
+    if (ww > scr->Width) ww = scr->Width;
+    if (wh > scr->Height - scr->BarHeight - 1) wh = scr->Height - scr->BarHeight - 1;
+    l = win->LeftEdge;
+    tp = win->TopEdge;
+    if (l + ww > scr->Width) l = scr->Width - ww;
+    if (tp + wh > scr->Height) tp = scr->Height - wh;
+    ChangeWindowBox(win, l, tp, ww, wh);
+    layout();                                     /* NEWSIZE follows if it changed */
+}
+
+static void save_font(const char *spec, int size)
+{
+    /* remembered for the next terminal (ENV: and ENVARC:) */
+    char v[220];
+    sprintf(v, "%.200s/%d", spec, size);
+    SetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), -1, GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
+}
+
+static void drop_tt(void)
+{
+    if (!ttfont) return;
+    if (win) tt_DoneRastPort(TTEngineBase, win->RPort);
+    tt_CloseFont(TTEngineBase, ttfont);
+    ttfont = NULL;
+}
+
+/* use font_path (a bitmap font) at this size */
 static int set_font(UWORD size, int save, int resize)
 {
     struct TextAttr ta;
     struct TextFont *f;
-    char v[200];
+    char v[64];
     const char *fp;
-    LONG ww, wh, l, tp, ncw, nch;
     if (!font_path[0]) return 0;
     ta.ta_Name = (STRPTR)NEARP(font_path);
     ta.ta_YSize = size;
@@ -1579,36 +1726,104 @@ static int set_font(UWORD size, int save, int resize)
         DisplayBeep(scr);
         return 0;
     }
+    drop_tt();
     if (win) {
         SetFont(win->RPort, f);
         font = f;
-        if (!resize) {
-            layout();
-            goto done;
-        }
-        ncw = f->tf_XSize;
-        nch = f->tf_YSize;
-        ww = win->Width - win->GZZWidth + cols * ncw;
-        wh = win->Height - win->GZZHeight + (nch + 6) + rows * nch;
-        if (ww > scr->Width) ww = scr->Width;
-        if (wh > scr->Height - scr->BarHeight - 1) wh = scr->Height - scr->BarHeight - 1;
-        l = win->LeftEdge;
-        tp = win->TopEdge;
-        if (l + ww > scr->Width) l = scr->Width - ww;
-        if (tp + wh > scr->Height) tp = scr->Height - wh;
-        ChangeWindowBox(win, l, tp, ww, wh);
-        layout();                                 /* NEWSIZE follows if it changed */
+        fit_window(f->tf_XSize, f->tf_YSize, resize);
     }
-done:
     if (ownfont) CloseFont(ownfont);
     ownfont = f;
     font = f;
     if (save) {
-        /* remembered for the next terminal (ENV: and ENVARC:) */
         fp = FilePart((STRPTR)NEARP(font_path));
-        sprintf(v, "%.*s/%d", (int)(strlen(fp) - 5), fp, (int)size);
-        SetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), -1, GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
+        sprintf(v, "%.*s", (int)(strlen(fp) - 5), fp);
+        save_font(v, size);
     }
+    return 1;
+}
+
+/* a TrueType font: a .ttf/.otf file, or "tt:Family Name" from the
+ * ttengine font database */
+static int is_tt(const char *spec)
+{
+    size_t n = strlen(spec);
+    if (!strncmp(spec, "tt:", 3)) return 1;
+    return n > 4 && (Stricmp((STRPTR)spec + n - 4, (STRPTR)".ttf") == 0 ||
+                     Stricmp((STRPTR)spec + n - 4, (STRPTR)".otf") == 0);
+}
+
+static APTR tt_open(const char *spec, int size)
+{
+    struct TagItem tg[4];
+    STRPTR fam[3];
+    if (!TTEngineBase) return NULL;
+    if (!strncmp(spec, "tt:", 3)) {
+        fam[0] = (STRPTR)spec + 3;
+        fam[1] = (STRPTR)"monospaced";
+        fam[2] = NULL;
+        tg[0].ti_Tag = TT_FamilyTable;
+        tg[0].ti_Data = (ULONG)fam;
+    } else {
+        tg[0].ti_Tag = TT_FontFile;
+        tg[0].ti_Data = (ULONG)spec;
+    }
+    tg[1].ti_Tag = TT_FontSize;
+    tg[1].ti_Data = (ULONG)size;
+    tg[2].ti_Tag = TT_FontFixedWidth;
+    tg[2].ti_Data = TRUE;
+    tg[3].ti_Tag = TAG_END;
+    return tt_OpenFontA(TTEngineBase, tg);
+}
+
+/* draw with a TrueType font from now on; anti-aliased on 15-bit and
+ * deeper (RTG) screens */
+static int use_tt(const char *spec, int size, int save, int resize)
+{
+    struct TagItem tg[5];
+    ULONG w = 0, h = 0, b = 0;
+    APTR f;
+    if (!win || size < 4 || size > 200) return 0;
+    f = tt_open(spec, size);
+    if (!f) return 0;
+    if (!tt_SetFont(TTEngineBase, win->RPort, f)) {
+        tt_CloseFont(TTEngineBase, f);
+        return 0;
+    }
+    tg[0].ti_Tag = TT_Window;
+    tg[0].ti_Data = (ULONG)win;
+    tg[1].ti_Tag = TT_Antialias;
+    tg[1].ti_Data = GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH) >= 15 ? TT_Antialias_On : TT_Antialias_Off;
+    tg[2].ti_Tag = TT_DiskFontMetrics;
+    tg[2].ti_Data = TRUE;
+    tg[3].ti_Tag = TT_Encoding;
+    tg[3].ti_Data = TT_Encoding_ISO8859_1;
+    tg[4].ti_Tag = TAG_END;
+    tt_SetAttrsA(TTEngineBase, win->RPort, tg);
+    tg[0].ti_Tag = TT_FontWidth;
+    tg[0].ti_Data = (ULONG)&w;
+    tg[1].ti_Tag = TT_FontHeight;
+    tg[1].ti_Data = (ULONG)&h;
+    tg[2].ti_Tag = TT_FontBaseline;
+    tg[2].ti_Data = (ULONG)&b;
+    tg[3].ti_Tag = TAG_END;
+    tt_GetAttrsA(TTEngineBase, win->RPort, tg);
+    if (!w || !h) {
+        /* not usable on a grid: back to what was there */
+        if (ttfont) tt_SetFont(TTEngineBase, win->RPort, ttfont);
+        tt_CloseFont(TTEngineBase, f);
+        return 0;
+    }
+    if (ttfont) tt_CloseFont(TTEngineBase, ttfont);
+    ttfont = f;
+    if (strcmp(spec, tt_spec)) sprintf(tt_spec, "%.199s", spec);
+    tt_size = size;
+    tt_cw = (int)w;
+    tt_chh = (int)h;
+    tt_base = (int)b;
+    font = win->RPort->Font;                  /* unchanged: not a setfont */
+    fit_window(w, h, resize);
+    if (save) save_font(spec, size);
     return 1;
 }
 
@@ -1622,17 +1837,33 @@ static UWORD pick_default(void)
     return d;
 }
 
-/* the font to start with: $AMIBASH_FONT ("name/size"), else AmiBashMono
- * (its tall-pixel cut on non-interlaced screens) at a size that suits
- * the screen, else the system font */
+/* The font to start with: $AMIBASH_FONT ("name/size", a TrueType file
+ * or "tt:family" too), else on an RTG screen with ttengine.library
+ * DejaVu Sans Mono, else AmiBashMono (its tall-pixel cut on
+ * non-interlaced screens), else the system font. */
 static void choose_font(void)
 {
     const char *fam = tall_pixels() ? "AmiBashMonoNL" : "AmiBashMono";
-    char v[100], *sl;
+    char v[220], *sl;
     UWORD size = 0;
-    if (GetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), sizeof(v), 0) > 0 && (sl = strchr(v, '/')) != NULL) {
+    int i;
+    tt_default = scr->Height / 45;
+    if (tt_default < 10) tt_default = 10;
+    if (GetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), sizeof(v), 0) > 0 && (sl = strrchr(v, '/')) != NULL) {
         *sl = 0;
-        if (find_font(v)) size = (UWORD)atoi(sl + 1);
+        if (is_tt(v)) {
+            if (use_tt(v, atoi(sl + 1), 0, 0)) return;
+        } else if (find_font(v))
+            size = (UWORD)atoi(sl + 1);
+    }
+    if (!size && TTEngineBase && GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH) >= 15) {
+        for (i = 0; i < 5; i++) {
+            const char *p = i == 0 ? "PROGDIR:Fonts/DejaVuSansMono.ttf" :
+                            i == 1 ? "FONTS:DejaVuSansMono.ttf" :
+                            i == 2 ? "FONTS:_TrueType/DejaVuSansMono.ttf" :
+                            i == 3 ? "FONTS:TrueType/DejaVuSansMono.ttf" : "tt:DejaVu Sans Mono";
+            if (use_tt(p, tt_default, 0, 0)) return;
+        }
     }
     if (!size && !find_font(fam)) return;         /* keep the system font */
     font_default = pick_default();
@@ -1648,6 +1879,13 @@ static void zoom(int dir)
 {
     UWORD cur_size = font ? font->tf_YSize : 8, size = cur_size;
     int i;
+    if (ttfont) {
+        char spec[200];
+        int z = dir == 0 ? tt_default : tt_size + dir * (tt_size < 16 ? 1 : tt_size < 32 ? 2 : 4);
+        strcpy(spec, tt_spec);
+        if (z == tt_size || !use_tt(spec, z, 1, 1)) DisplayBeep(scr);
+        return;
+    }
     if (!font_path[0]) {
         /* system font: zoom within its family */
         struct TextFont *f = font;
@@ -1706,6 +1944,43 @@ static void font_requester(void)
     FreeAslRequest(fr);
 }
 
+/* "TrueType Font...": ttengine's requester, monospaced fonts only */
+static void tt_requester(void)
+{
+    struct TagItem tg[6], *res;
+    APTR rq;
+    if (!TTEngineBase || !UtilityBase || !win || !(rq = tt_AllocRequest(TTEngineBase))) {
+        DisplayBeep(scr);
+        return;
+    }
+    tg[0].ti_Tag = TTRQ_Window;
+    tg[0].ti_Data = (ULONG)win;
+    tg[1].ti_Tag = TTRQ_TitleText;
+    tg[1].ti_Data = (ULONG)"Terminal font (TrueType)";
+    tg[2].ti_Tag = TTRQ_FixedWidthOnly;
+    tg[2].ti_Data = TRUE;
+    tg[3].ti_Tag = TTRQ_DoPreview;
+    tg[3].ti_Data = TRUE;
+    tg[4].ti_Tag = TTRQ_InitialSize;
+    tg[4].ti_Data = ttfont ? tt_size : tt_default;
+    tg[5].ti_Tag = TAG_END;
+    res = tt_RequestA(TTEngineBase, rq, tg);
+    if (res) {
+        STRPTR file = (STRPTR)GetTagData(TT_FontFile, 0, res);
+        STRPTR *fam = (STRPTR *)GetTagData(TT_FamilyTable, 0, res);
+        int size = (int)GetTagData(TT_FontSize, tt_default, res);
+        char spec[200];
+        spec[0] = 0;
+        if (file) sprintf(spec, "%.199s", (char *)file);
+        else if (fam && fam[0]) sprintf(spec, "tt:%.190s", (char *)fam[0]);
+        if (spec[0]) {
+            tt_default = size;
+            if (!use_tt(spec, size, 1, 1)) DisplayBeep(scr);
+        }
+    }
+    tt_FreeRequest(TTEngineBase, rq);
+}
+
 static struct NewMenu nm[] = {
     {NM_TITLE, (STRPTR)"Terminal", 0, 0, 0, 0},
     {NM_ITEM, (STRPTR)"New Tab", (STRPTR)"T", 0, 0, 0},
@@ -1718,6 +1993,7 @@ static struct NewMenu nm[] = {
     {NM_ITEM, (STRPTR)"Smaller Text", (STRPTR)"-", 0, 0, 0},
     {NM_ITEM, (STRPTR)"Default Size", (STRPTR)"0", 0, 0, 0},
     {NM_ITEM, (STRPTR)"Font...", (STRPTR)"F", 0, 0, 0},
+    {NM_ITEM, (STRPTR)"TrueType Font...", 0, 0, 0, 0},
     {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
     {NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, 0},
     {NM_END, 0, 0, 0, 0, 0}
@@ -1735,7 +2011,8 @@ static void do_item(int item)
     case 7: zoom(-1); break;
     case 8: zoom(0); break;
     case 9: font_requester(); break;
-    case 11: quitting = 1; break;
+    case 10: tt_requester(); break;
+    case 12: quitting = 1; break;
     }
 }
 
@@ -1810,6 +2087,8 @@ static int open_libs(void)
     if (!KeymapBase) KeymapBase = OpenLibrary((STRPTR)"keymap.library", 37);
     if (!DiskfontBase) DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
     if (!AslBase) AslBase = OpenLibrary((STRPTR)"asl.library", 38);     /* optional */
+    if (!UtilityBase) UtilityBase = OpenLibrary((STRPTR)"utility.library", 37);
+    if (!TTEngineBase) TTEngineBase = OpenLibrary((STRPTR)"ttengine.library", 7);  /* optional */
     return IntuitionBase && GfxBase && GadToolsBase && KeymapBase;
 }
 
@@ -1860,7 +2139,7 @@ int term_main(const char *selfpath)
     font = OpenFont(&ta);
     if (!font) font = GfxBase->DefaultFont;
     /* dark theme by default (like most terminals): text pen 2 on pen 1 */
-    def_attr = (UWORD)((pen_back << 3) | pen_text);
+    def_attr = A_DEFFG | A_DEFBG;
     {
         char b[12];
         if (GetVar((STRPTR)"AMIBASH_SCROLLBACK", (STRPTR)b, sizeof(b), 0) > 0) {
@@ -1892,7 +2171,9 @@ int term_main(const char *selfpath)
         return term_fail("cannot open the window (out of memory?)");
     }
     SetFont(win->RPort, font);
+    obtain_pens();
     choose_font();
+    if (!TTEngineBase) nm[11].nm_Flags = NM_ITEMDISABLED;
     menus = CreateMenus(nm, TAG_END);
     if (menus && LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_END)) SetMenuStrip(win, menus);
     pubport = CreateMsgPort();
@@ -1957,6 +2238,8 @@ int term_main(const char *selfpath)
             /* last tab gone: the window goes away; keep serving until
              * every shell has closed its handles */
             ClearMenuStrip(win);
+            if (ttfont) drop_tt();
+            release_pens();
             CloseWindow(win);
             win = NULL;
         }
@@ -2021,7 +2304,11 @@ int term_main(const char *selfpath)
                     break;
                 }
             }
-            if (win && win->RPort->Font != font) layout();      /* setfont */
+            if (win && win->RPort->Font != font) {
+                /* setfont in a tab: that bitmap font replaces TrueType */
+                if (ttfont) drop_tt();
+                layout();
+            }
             if (win && sb_dirty) update_scroller();
         }
     }

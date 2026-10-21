@@ -404,7 +404,12 @@ int main(int argc, char **argv)
         sh.opt_monitor = 0;
         if (!var_get("PS1")) {
 #ifdef AMIGA
-            var_set("PS1", "\\[\\e[1m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[33m\\]\\w\\[\\e[0m\\]\\$ ", 0);
+            /* the console shows colour 33 in pen 3 (blue on Workbench);
+             * the AmiBash Terminal shows real ANSI colours */
+            if (var_get("AMIBASH_TERM"))
+                var_set("PS1", "\\[\\e[1m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ ", 0);
+            else
+                var_set("PS1", "\\[\\e[1m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[33m\\]\\w\\[\\e[0m\\]\\$ ", 0);
 #else
             var_set("PS1", "\\u@\\h:\\w\\$ ", 0);
 #endif
