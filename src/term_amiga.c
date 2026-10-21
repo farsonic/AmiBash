@@ -286,11 +286,57 @@ static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
     }
 }
 
+/* While term_write() works through output, drawing is deferred: rows
+ * only remember which cells changed and scrolling is counted, and at the
+ * end one ScrollRaster() and one Text() per changed run do it all.  Each
+ * Text() call is costly with AAText (and a scroll per line jitters). */
+#define DMAXROWS 512
+static int batching;                 /* inside term_write()             */
+static int pend_scroll;              /* lines to scroll up at the flush  */
+static WORD dmin[DMAXROWS], dmax[DMAXROWS];   /* changed cells per row */
+
+static void damage_clear(void)
+{
+    int y;
+    for (y = 0; y < DMAXROWS; y++) {
+        dmin[y] = 0x7FFF;
+        dmax[y] = 0;
+    }
+    pend_scroll = 0;
+}
+
 /* draw cells [x0, x1) of screen row y (not while scrolled back) */
 static void draw_run(Tab *t, int y, int x0, int x1)
 {
     if (!t || t != active() || !win || t->view) return;
+    if (batching && y < DMAXROWS) {
+        if (x0 < dmin[y]) dmin[y] = (WORD)x0;
+        if (x1 > dmax[y]) dmax[y] = (WORD)x1;
+        return;
+    }
     draw_cells(y, t->ch + y * cols, t->at + y * cols, x0, x1);
+}
+
+/* the deferred scroll and drawing */
+static void damage_flush(Tab *t)
+{
+    int y;
+    batching = 0;
+    if (t == active() && win && !t->view) {
+        if (pend_scroll >= rows) {
+            for (y = 0; y < rows && y < DMAXROWS; y++) {
+                dmin[y] = 0;
+                dmax[y] = (WORD)cols;
+            }
+        } else if (pend_scroll > 0) {
+            SetBPen(win->RPort, pen_bg(t->attr));
+            ScrollRaster(win->RPort, 0, pend_scroll * chh, 0, term_top(), cols * cw - 1,
+                         term_top() + rows * chh - 1);
+        }
+        for (y = 0; y < rows && y < DMAXROWS; y++)
+            if (dmin[y] < dmax[y]) draw_cells(y, t->ch + y * cols, t->at + y * cols, dmin[y], dmax[y]);
+    }
+    damage_clear();
 }
 
 /* the line shown at display row y: scrollback or screen; its width */
@@ -588,7 +634,15 @@ static void scroll_up(Tab *t, int n)
     memmove(t->ch, t->ch + n * cols, (rows - n) * cols);
     memmove(t->at, t->at + n * cols, (rows - n) * cols * sizeof(UWORD));
     clear_cells(t, (rows - n) * cols, rows * cols);
-    if (t == active() && win && !t->view) {
+    if (t == active() && win && !t->view && batching && rows <= DMAXROWS) {
+        /* later, in one go: what was to be drawn moves up with the text */
+        int y;
+        pend_scroll += n;
+        for (y = 0; y < rows; y++) {
+            dmin[y] = y + n < rows ? dmin[y + n] : 0;
+            dmax[y] = y + n < rows ? dmax[y + n] : (WORD)cols;
+        }
+    } else if (t == active() && win && !t->view) {
         SetBPen(win->RPort, pen_bg(t->attr));
         ScrollRaster(win->RPort, 0, n * chh, 0, term_top(), cols * cw - 1, term_top() + rows * chh - 1);
         if (win->GZZWidth > cols * cw || 1) {
@@ -789,6 +843,8 @@ static void term_write(Tab *t, const UBYTE *s, long n)
         /* still keep the buffer up to date for inactive tabs */
     }
     if (t == active()) draw_cursor(t);          /* hide (complement) */
+    damage_clear();
+    batching = 1;
     for (i = 0; i < n; i++) {
         UBYTE c = s[i];
         if (t->esc == 1) {
@@ -887,6 +943,7 @@ static void term_write(Tab *t, const UBYTE *s, long n)
             if (c >= 32 && c != 127 && !(c >= 0x80 && c < 0xA0)) put_char(t, c);
         }
     }
+    damage_flush(t);
     if (t == active()) draw_cursor(t);          /* show */
 }
 
