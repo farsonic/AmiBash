@@ -151,56 +151,7 @@ static int sb_held;              /* arrow held down: -1 up, +1 down    */
 static LONG sb_settop = -1;      /* last top we set                    */
 static int launched;             /* shells started successfully          */
 
-/* ------------------------------------------------------------------ */
-/* TrueType text through ttengine.library (Aminet util/libs/ttengine),  */
-/* used when it is installed.  vbcc has no inline header for it, so the */
-/* calls are declared here (offsets from ttengine_lib.sfd).             */
-
-struct Library *TTEngineBase;
 struct Library *UtilityBase;
-#define TT_FontFile         0x6EDA0000
-#define TT_FamilyTable      0x6EDA0002
-#define TT_FontSize         0x6EDA0003
-#define TT_Window           0x6EDA0007
-#define TT_Antialias        0x6EDA000F
-#define TT_Antialias_Off    1
-#define TT_Antialias_On     2
-#define TT_Encoding         0x6EDA0010
-#define TT_Encoding_ISO8859_1 4
-#define TT_FontBaseline     0x6EDA001E
-#define TT_FontFixedWidth   0x6EDA0026
-#define TT_FontHeight       0x6EDA0027
-#define TT_FontWidth        0x6EDA0028
-#define TT_DiskFontMetrics  0x6EDA0029
-#define TTRQ_Window         0x6EDA2000
-#define TTRQ_TitleText      0x6EDA2004
-#define TTRQ_DoSizes        0x6EDA200B
-#define TTRQ_InitialSize    0x6EDA200F
-#define TTRQ_DoPreview      0x6EDA2012
-#define TTRQ_FixedWidthOnly 0x6EDA2013
-
-APTR tt_OpenFontA(__reg("a6") struct Library *, __reg("a0") struct TagItem *) = "\tjsr\t-30(a6)";
-BOOL tt_SetFont(__reg("a6") struct Library *, __reg("a1") struct RastPort *, __reg("a0") APTR) = "\tjsr\t-36(a6)";
-VOID tt_CloseFont(__reg("a6") struct Library *, __reg("a0") APTR) = "\tjsr\t-42(a6)";
-VOID tt_Text(__reg("a6") struct Library *, __reg("a1") struct RastPort *, __reg("a0") APTR,
-             __reg("d0") ULONG) = "\tjsr\t-48(a6)";
-ULONG tt_SetAttrsA(__reg("a6") struct Library *, __reg("a1") struct RastPort *,
-                   __reg("a0") struct TagItem *) = "\tjsr\t-54(a6)";
-ULONG tt_GetAttrsA(__reg("a6") struct Library *, __reg("a1") struct RastPort *,
-                   __reg("a0") struct TagItem *) = "\tjsr\t-60(a6)";
-VOID tt_DoneRastPort(__reg("a6") struct Library *, __reg("a1") struct RastPort *) = "\tjsr\t-96(a6)";
-APTR tt_AllocRequest(__reg("a6") struct Library *) = "\tjsr\t-102(a6)";
-struct TagItem *tt_RequestA(__reg("a6") struct Library *, __reg("a0") APTR,
-                            __reg("a1") struct TagItem *) = "\tjsr\t-108(a6)";
-VOID tt_FreeRequest(__reg("a6") struct Library *, __reg("a0") APTR) = "\tjsr\t-114(a6)";
-
-static APTR ttfont;              /* TrueType font in use, or NULL      */
-static char tt_spec[200];        /* its file, or "tt:" + family name   */
-static int tt_size, tt_default;
-static int tt_cw, tt_chh, tt_base;
-
-/* ------------------------------------------------------------------ */
-/* small helpers                                                        */
 
 static BPTR dbgfh;
 static void dbg(const char *fmt, LONG a, LONG b, LONG c)
@@ -291,11 +242,12 @@ static void release_pens(void)
     pens_obtained = 0;
 }
 
-/* Text() in the terminal's font, bitmap or TrueType */
+/* Text() in the terminal's font.  TrueType fonts come through diskfont
+ * (an .otag font); on RTG screens AAText (Aminet util/wb/AAText), if it
+ * runs, draws them anti-aliased by patching Text() itself. */
 static void txt(struct RastPort *r, const char *s, int n)
 {
-    if (ttfont) tt_Text(TTEngineBase, r, (APTR)s, (ULONG)n);
-    else Text(r, (STRPTR)s, n);
+    Text(r, (STRPTR)s, n);
 }
 
 /* draw cells [x0, x1) of the line c/a at display row y */
@@ -1050,8 +1002,6 @@ static void tab_free(Tab *t);
 static void do_item(int item);
 static void zoom(int dir);
 static void font_requester(void);
-static void tt_requester(void);
-static void drop_tt(void);
 
 static void handle_packet(Tab *t, struct DosPacket *dp)
 {
@@ -1523,15 +1473,9 @@ static void layout(void)
     int i, ncols, nrows;
     struct TextFont *f = win->RPort->Font;
     if (f != font) font = f;
-    if (ttfont) {
-        cw = tt_cw;
-        chh = tt_chh;
-        base = tt_base;
-    } else {
-        cw = font->tf_XSize;
-        chh = font->tf_YSize;
-        base = font->tf_Baseline;
-    }
+    cw = font->tf_XSize;
+    chh = font->tf_YSize;
+    base = font->tf_Baseline;
     tabh = chh + 6;
     ncols = win->GZZWidth / cw;
     nrows = (win->GZZHeight - tabh) / chh;
@@ -1610,7 +1554,8 @@ static void click(int x, int y)
 
 static char font_path[160];      /* "FONTS:AmiBashMono.font"           */
 static UWORD font_sizes[40];     /* its designed sizes, ascending      */
-static int nsizes;               /* 0: scalable (outline) font         */
+static int nsizes;
+static int scalable;             /* TrueType (.otag): any size         */
 static UWORD font_default;       /* size for Amiga-0                   */
 static struct TextFont *ownfont; /* opened by us, closed on change     */
 
@@ -1621,6 +1566,20 @@ static int tall_pixels(void)
     ULONG id = GetVPModeID(&scr->ViewPort);
     if (id == INVALID_ID || !GetDisplayInfoData(NULL, (UBYTE *)&di, sizeof(di), DTAG_DISP, id)) return 0;
     return di.Resolution.y >= di.Resolution.x * 3 / 2;
+}
+
+/* a 15-bit or deeper (RTG) screen: TrueType fonts there, which AAText
+ * draws anti-aliased; palette (AGA/ECS) screens keep bitmap fonts */
+static int rtg_screen(void)
+{
+    return GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH) >= 15;
+}
+
+/* the variable that remembers the font: one for RTG screens, one for
+ * palette screens, so each kind keeps its own choice */
+static const char *font_var(void)
+{
+    return rtg_screen() ? "AMIBASH_RTGFONT" : "AMIBASH_FONT";
 }
 
 /* read the sizes listed in a .font file; 0 if it cannot be read */
@@ -1650,6 +1609,15 @@ static int read_sizes(const char *path)
         }
     }
     Close(fh);
+    if (n) {
+        /* a TrueType/OpenType font installed for diskfont has an .otag
+         * next to its .font: it comes in every size */
+        char o[164];
+        BPTR l;
+        sprintf(o, "%.*s.otag", (int)strlen(path) - 5, path);
+        scalable = (l = Lock((STRPTR)o, SHARED_LOCK)) != 0;
+        if (l) UnLock(l);
+    }
     return n;
 }
 
@@ -1660,7 +1628,7 @@ static int find_font(const char *name)
     char p[160];
     int i;
     for (i = 0; i < 2; i++) {
-        sprintf(p, "%s%s.font", dirs[i], name);
+        sprintf(p, "%s%.100s.font", dirs[i], name);
         if (read_sizes(p)) {
             strcpy(font_path, p);
             return 1;
@@ -1695,18 +1663,10 @@ static void save_font(const char *spec, int size)
     /* remembered for the next terminal (ENV: and ENVARC:) */
     char v[220];
     sprintf(v, "%.200s/%d", spec, size);
-    SetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), -1, GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
+    SetVar((STRPTR)font_var(), (STRPTR)NEARP(v), -1, GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
 }
 
-static void drop_tt(void)
-{
-    if (!ttfont) return;
-    if (win) tt_DoneRastPort(TTEngineBase, win->RPort);
-    tt_CloseFont(TTEngineBase, ttfont);
-    ttfont = NULL;
-}
-
-/* use font_path (a bitmap font) at this size */
+/* use font_path at this size */
 static int set_font(UWORD size, int save, int resize)
 {
     struct TextAttr ta;
@@ -1726,7 +1686,6 @@ static int set_font(UWORD size, int save, int resize)
         DisplayBeep(scr);
         return 0;
     }
-    drop_tt();
     if (win) {
         SetFont(win->RPort, f);
         font = f;
@@ -1743,149 +1702,118 @@ static int set_font(UWORD size, int save, int resize)
     return 1;
 }
 
-/* a TrueType font: a .ttf/.otf file, or "tt:Family Name" from the
- * ttengine font database */
-static int is_tt(const char *spec)
-{
-    size_t n = strlen(spec);
-    if (!strncmp(spec, "tt:", 3)) return 1;
-    return n > 4 && (Stricmp((STRPTR)spec + n - 4, (STRPTR)".ttf") == 0 ||
-                     Stricmp((STRPTR)spec + n - 4, (STRPTR)".otf") == 0);
-}
-
-static APTR tt_open(const char *spec, int size)
-{
-    struct TagItem tg[4];
-    STRPTR fam[3];
-    if (!TTEngineBase) return NULL;
-    if (!strncmp(spec, "tt:", 3)) {
-        fam[0] = (STRPTR)spec + 3;
-        fam[1] = (STRPTR)"monospaced";
-        fam[2] = NULL;
-        tg[0].ti_Tag = TT_FamilyTable;
-        tg[0].ti_Data = (ULONG)fam;
-    } else {
-        tg[0].ti_Tag = TT_FontFile;
-        tg[0].ti_Data = (ULONG)spec;
-    }
-    tg[1].ti_Tag = TT_FontSize;
-    tg[1].ti_Data = (ULONG)size;
-    tg[2].ti_Tag = TT_FontFixedWidth;
-    tg[2].ti_Data = TRUE;
-    tg[3].ti_Tag = TAG_END;
-    return tt_OpenFontA(TTEngineBase, tg);
-}
-
-/* draw with a TrueType font from now on; anti-aliased on 15-bit and
- * deeper (RTG) screens */
-static int use_tt(const char *spec, int size, int save, int resize)
-{
-    struct TagItem tg[5];
-    ULONG w = 0, h = 0, b = 0;
-    APTR f;
-    if (!win || size < 4 || size > 200) return 0;
-    f = tt_open(spec, size);
-    if (!f) return 0;
-    if (!tt_SetFont(TTEngineBase, win->RPort, f)) {
-        tt_CloseFont(TTEngineBase, f);
-        return 0;
-    }
-    tg[0].ti_Tag = TT_Window;
-    tg[0].ti_Data = (ULONG)win;
-    tg[1].ti_Tag = TT_Antialias;
-    tg[1].ti_Data = GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH) >= 15 ? TT_Antialias_On : TT_Antialias_Off;
-    tg[2].ti_Tag = TT_DiskFontMetrics;
-    tg[2].ti_Data = TRUE;
-    tg[3].ti_Tag = TT_Encoding;
-    tg[3].ti_Data = TT_Encoding_ISO8859_1;
-    tg[4].ti_Tag = TAG_END;
-    tt_SetAttrsA(TTEngineBase, win->RPort, tg);
-    tg[0].ti_Tag = TT_FontWidth;
-    tg[0].ti_Data = (ULONG)&w;
-    tg[1].ti_Tag = TT_FontHeight;
-    tg[1].ti_Data = (ULONG)&h;
-    tg[2].ti_Tag = TT_FontBaseline;
-    tg[2].ti_Data = (ULONG)&b;
-    tg[3].ti_Tag = TAG_END;
-    tt_GetAttrsA(TTEngineBase, win->RPort, tg);
-    if (!w || !h) {
-        /* not usable on a grid: back to what was there */
-        if (ttfont) tt_SetFont(TTEngineBase, win->RPort, ttfont);
-        tt_CloseFont(TTEngineBase, f);
-        return 0;
-    }
-    if (ttfont) tt_CloseFont(TTEngineBase, ttfont);
-    ttfont = f;
-    if (strcmp(spec, tt_spec)) sprintf(tt_spec, "%.199s", spec);
-    tt_size = size;
-    tt_cw = (int)w;
-    tt_chh = (int)h;
-    tt_base = (int)b;
-    font = win->RPort->Font;                  /* unchanged: not a setfont */
-    fit_window(w, h, resize);
-    if (save) save_font(spec, size);
-    return 1;
-}
-
-/* the designed size nearest below about 50 lines on the screen */
+/* the size to start with: about 45 lines on the screen for a TrueType
+ * font, else the designed size nearest below about 50 */
 static UWORD pick_default(void)
 {
     int i, want = scr->Height / 50;
-    UWORD d = nsizes ? font_sizes[0] : (UWORD)want;
+    UWORD d;
+    if (scalable) {
+        want = scr->Height / 45;
+        return (UWORD)(want < 10 ? 10 : want);
+    }
+    d = nsizes ? font_sizes[0] : (UWORD)want;
     for (i = 0; i < nsizes; i++)
         if (font_sizes[i] <= want) d = font_sizes[i];
     return d;
 }
 
-/* The font to start with: $AMIBASH_FONT ("name/size", a TrueType file
- * or "tt:family" too), else on an RTG screen with ttengine.library
- * DejaVu Sans Mono, else AmiBashMono (its tall-pixel cut on
- * non-interlaced screens), else the system font. */
+/* an installed TrueType font that suits a terminal: a well-known
+ * monospaced family (as FTManager/AATextManager name them, with or
+ * without the style), else any fixed-width .otag font whose name says
+ * so.  Leaves it in font_path. */
+static int find_ttf(void)
+{
+    static const char *const fams[] = {"DejaVu Sans Mono", "DejaVuSansMono", "JetBrains Mono", "Liberation Mono",
+                                       "Ubuntu Mono", "Noto Sans Mono", "Fira Mono", "Source Code Pro",
+                                       "Bitstream Vera Sans Mono", "Vera Mono", "Courier New", NULL};
+    static const char *const styles[] = {"", " Book", " Regular", " Roman", " Normal", NULL};
+    static const char *const hints[] = {"Mono", "Courier", "Code", "Console", "Fixed", NULL};
+    struct FileInfoBlock *fib;
+    char n[120];
+    BPTR l;
+    int i, k, found = 0;
+    for (i = 0; fams[i]; i++)
+        for (k = 0; styles[k]; k++) {
+            sprintf(n, "%s%s", fams[i], styles[k]);
+            if (find_font(n) && scalable) return 1;
+        }
+    if (!(fib = AllocDosObject(DOS_FIB, NULL))) return 0;
+    if ((l = Lock((STRPTR)"FONTS:", SHARED_LOCK)) != 0) {
+        if (Examine(l, fib))
+            while (!found && ExNext(l, fib)) {
+                char *f = (char *)fib->fib_FileName;
+                int len = (int)strlen(f);
+                if (len < 6 || Stricmp((STRPTR)f + len - 5, (STRPTR)".otag") || strstr(f, "Bold") ||
+                    strstr(f, "Italic") || strstr(f, "Oblique"))
+                    continue;
+                for (k = 0; hints[k] && !strstr(f, hints[k]); k++) ;
+                if (!hints[k]) continue;
+                sprintf(n, "%.*s", len - 5, f);
+                if (find_font(n) && scalable) {
+                    /* fixed width? open it once to see */
+                    struct TextAttr ta;
+                    struct TextFont *tf;
+                    ta.ta_Name = (STRPTR)NEARP(font_path);
+                    ta.ta_YSize = 12;
+                    ta.ta_Style = 0;
+                    ta.ta_Flags = 0;
+                    if (DiskfontBase && (tf = OpenDiskFont(&ta)) != NULL) {
+                        found = !(tf->tf_Flags & FPF_PROPORTIONAL);
+                        CloseFont(tf);
+                    }
+                }
+            }
+        UnLock(l);
+    }
+    FreeDosObject(DOS_FIB, fib);
+    if (!found) font_path[0] = 0;
+    return found;
+}
+
+/* The font to start with: the remembered one ($AMIBASH_RTGFONT on RTG
+ * screens, $AMIBASH_FONT on palette screens, "name/size"), else on an
+ * RTG screen an installed TrueType monospaced font, else AmiBashMono
+ * (its tall-pixel cut on non-interlaced screens), else the system font. */
 static void choose_font(void)
 {
     const char *fam = tall_pixels() ? "AmiBashMonoNL" : "AmiBashMono";
     char v[220], *sl;
-    UWORD size = 0;
-    int i;
-    tt_default = scr->Height / 45;
-    if (tt_default < 10) tt_default = 10;
-    if (GetVar((STRPTR)"AMIBASH_FONT", (STRPTR)NEARP(v), sizeof(v), 0) > 0 && (sl = strrchr(v, '/')) != NULL) {
+    UWORD size;
+    if (GetVar((STRPTR)font_var(), (STRPTR)NEARP(v), sizeof(v), 0) > 0 && (sl = strrchr(v, '/')) != NULL) {
         *sl = 0;
-        if (is_tt(v)) {
-            if (use_tt(v, atoi(sl + 1), 0, 0)) return;
-        } else if (find_font(v))
+        if (find_font(v)) {
             size = (UWORD)atoi(sl + 1);
-    }
-    if (!size && TTEngineBase && GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH) >= 15) {
-        for (i = 0; i < 5; i++) {
-            const char *p = i == 0 ? "PROGDIR:Fonts/DejaVuSansMono.ttf" :
-                            i == 1 ? "FONTS:DejaVuSansMono.ttf" :
-                            i == 2 ? "FONTS:_TrueType/DejaVuSansMono.ttf" :
-                            i == 3 ? "FONTS:TrueType/DejaVuSansMono.ttf" : "tt:DejaVu Sans Mono";
-            if (use_tt(p, tt_default, 0, 0)) return;
+            font_default = scalable ? pick_default() : size;
+            if (set_font(size, 0, 0)) return;
         }
     }
-    if (!size && !find_font(fam)) return;         /* keep the system font */
-    font_default = pick_default();
-    if (set_font(size ? size : font_default, 0, 0)) return;
-    if (find_font(fam)) {
+    dbg("font: rtg %ld depth %ld", rtg_screen(), (LONG)GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH), 0);
+    if (rtg_screen() && find_ttf()) {
+        long t0 = now_ticks();
+        dbg("font: TrueType %s", (LONG)font_path, 0, 0);
         font_default = pick_default();
-        set_font(font_default, 0, 0);
+        if (set_font(font_default, 0, 0)) {
+            dbg("font: opened at %ld in %ld ticks", font_default, now_ticks() - t0, 0);
+            return;
+        }
     }
+    font_path[0] = 0;
+    scalable = 0;
+    if (!find_font(fam)) {
+        dbg("font: no %s, system font", (LONG)fam, 0, 0);
+        return;                                    /* keep the system font */
+    }
+    font_default = pick_default();
+    set_font(font_default, 0, 0);
 }
 
-/* Amiga-+ / Amiga-- / Amiga-0: the next designed size up or down */
+/* Amiga-+ / Amiga-- / Amiga-0: TrueType fonts by a pixel or two, bitmap
+ * fonts to their next designed size */
 static void zoom(int dir)
 {
     UWORD cur_size = font ? font->tf_YSize : 8, size = cur_size;
     int i;
-    if (ttfont) {
-        char spec[200];
-        int z = dir == 0 ? tt_default : tt_size + dir * (tt_size < 16 ? 1 : tt_size < 32 ? 2 : 4);
-        strcpy(spec, tt_spec);
-        if (z == tt_size || !use_tt(spec, z, 1, 1)) DisplayBeep(scr);
-        return;
-    }
     if (!font_path[0]) {
         /* system font: zoom within its family */
         struct TextFont *f = font;
@@ -1897,7 +1825,7 @@ static void zoom(int dir)
         font_default = cur_size;
     }
     if (dir == 0) size = font_default;
-    else if (nsizes) {
+    else if (nsizes && !scalable) {
         if (dir > 0) {
             for (i = 0; i < nsizes; i++)
                 if (font_sizes[i] > cur_size) {
@@ -1912,14 +1840,15 @@ static void zoom(int dir)
                 }
         }
     } else {
-        size = (UWORD)(cur_size + dir * (cur_size >= 16 ? 2 : 1));   /* outline font */
+        size = (UWORD)(cur_size + dir * (cur_size >= 16 ? 2 : 1));
         if (size < 6) size = 6;
         if (size > 72) size = 72;
     }
     if (size == cur_size || !set_font(size, 1, 1)) DisplayBeep(scr);
 }
 
-/* "Font...": the ASL font requester, fixed-width fonts only */
+/* "Font...": the ASL font requester, fixed-width fonts only; TrueType
+ * fonts installed with AATextManager or FTManager are listed too */
 static void font_requester(void)
 {
     struct FontRequester *fr;
@@ -1929,7 +1858,7 @@ static void font_requester(void)
         return;
     }
     fr = AllocAslRequestTags(ASL_FontRequest, ASLFO_Window, (ULONG)win, ASLFO_TitleText,
-                             (ULONG)"Terminal font", ASLFO_FixedWidthOnly, TRUE, ASLFO_MaxHeight, 64,
+                             (ULONG)"Terminal font", ASLFO_FixedWidthOnly, TRUE, ASLFO_MaxHeight, 72,
                              ASLFO_InitialName, (ULONG)(font ? font->tf_Message.mn_Node.ln_Name : "topaz.font"),
                              ASLFO_InitialSize, font ? font->tf_YSize : 8, TAG_END);
     if (!fr) return;
@@ -1944,108 +1873,6 @@ static void font_requester(void)
     FreeAslRequest(fr);
 }
 
-/* "TrueType Font...": ttengine's requester, monospaced fonts only */
-/* ttengine.library would not open: find out why and tell the user */
-static void tt_explain(void)
-{
-    struct EasyStruct es;
-    char msg[400];
-    struct Library *l;
-    BPTR fh = Open((STRPTR)"LIBS:ttengine.library", MODE_OLDFILE);
-    ULONG magic = 0;
-    if (fh) {
-        Read(fh, &magic, 4);
-        Close(fh);
-    }
-    if (!fh)
-        strcpy(msg, "ttengine.library is not in LIBS:.\n\n"
-                    "Get util/libs/ttengine.lha from Aminet and copy\n"
-                    "ttengine-7.1/Libs_68k/ttengine.library to LIBS:");
-    else if (magic != 0x000003F3)
-        strcpy(msg, "LIBS:ttengine.library is not the 68k version\n"
-                    "(the archive also has PowerPC ones for OS4 and MorphOS).\n\n"
-                    "Copy ttengine-7.1/Libs_68k/ttengine.library to LIBS:");
-    else if ((l = OpenLibrary((STRPTR)"ttengine.library", 0)) != NULL) {
-        sprintf(msg, "LIBS:ttengine.library is version %d; version 7 is needed.", (int)l->lib_Version);
-        CloseLibrary(l);
-    } else
-        strcpy(msg, "LIBS:ttengine.library is there but did not start.\n\n"
-                    "It needs a 68020 or better, mathieeesingbas.library\n"
-                    "and mathieeesingtrans.library (in LIBS:), and ENV:.");
-    es.es_StructSize = sizeof(es);
-    es.es_Flags = 0;
-    es.es_Title = (UBYTE *)"AmiBash Terminal";
-    es.es_TextFormat = (UBYTE *)"%s";
-    es.es_GadgetFormat = (UBYTE *)"OK";
-    EasyRequest(win, &es, NULL, (ULONG)msg);
-}
-
-static void tt_requester(void)
-{
-    struct TagItem tg[6], *res;
-    APTR rq;
-    if (!TTEngineBase) {
-        /* it may have been installed since the terminal started */
-        TTEngineBase = OpenLibrary((STRPTR)"ttengine.library", 7);
-        if (!TTEngineBase) {
-            tt_explain();
-            return;
-        }
-    }
-    {
-        /* ttengine's requester lists only fonts in its database (made
-         * with TTEManager); without one, pick a .ttf file instead */
-        BPTR db = Lock((STRPTR)"ENV:ttengine.database", SHARED_LOCK);
-        if (db) UnLock(db);
-        else if (AslBase && win) {
-            struct FileRequester *fr = AllocAslRequestTags(
-                ASL_FileRequest, ASLFR_Window, (ULONG)win, ASLFR_TitleText, (ULONG)"Terminal font (TrueType file)",
-                ASLFR_InitialDrawer, (ULONG)"FONTS:", ASLFR_InitialPattern, (ULONG)"#?.(ttf|otf)",
-                ASLFR_DoPatterns, TRUE, TAG_END);
-            if (fr) {
-                if (AslRequest(fr, NULL)) {
-                    char spec[200];
-                    sprintf(spec, "%.150s", (char *)fr->fr_Drawer);
-                    AddPart((STRPTR)spec, fr->fr_File, sizeof(spec));
-                    if (!use_tt(spec, ttfont ? tt_size : tt_default, 1, 1)) DisplayBeep(scr);
-                }
-                FreeAslRequest(fr);
-            }
-            return;
-        }
-    }
-    if (!UtilityBase || !win || !(rq = tt_AllocRequest(TTEngineBase))) {
-        DisplayBeep(scr);
-        return;
-    }
-    tg[0].ti_Tag = TTRQ_Window;
-    tg[0].ti_Data = (ULONG)win;
-    tg[1].ti_Tag = TTRQ_TitleText;
-    tg[1].ti_Data = (ULONG)"Terminal font (TrueType)";
-    tg[2].ti_Tag = TTRQ_FixedWidthOnly;
-    tg[2].ti_Data = TRUE;
-    tg[3].ti_Tag = TTRQ_DoPreview;
-    tg[3].ti_Data = TRUE;
-    tg[4].ti_Tag = TTRQ_InitialSize;
-    tg[4].ti_Data = ttfont ? tt_size : tt_default;
-    tg[5].ti_Tag = TAG_END;
-    res = tt_RequestA(TTEngineBase, rq, tg);
-    if (res) {
-        STRPTR file = (STRPTR)GetTagData(TT_FontFile, 0, res);
-        STRPTR *fam = (STRPTR *)GetTagData(TT_FamilyTable, 0, res);
-        int size = (int)GetTagData(TT_FontSize, tt_default, res);
-        char spec[200];
-        spec[0] = 0;
-        if (file) sprintf(spec, "%.199s", (char *)file);
-        else if (fam && fam[0]) sprintf(spec, "tt:%.190s", (char *)fam[0]);
-        if (spec[0]) {
-            tt_default = size;
-            if (!use_tt(spec, size, 1, 1)) DisplayBeep(scr);
-        }
-    }
-    tt_FreeRequest(TTEngineBase, rq);
-}
-
 static struct NewMenu nm[] = {
     {NM_TITLE, (STRPTR)"Terminal", 0, 0, 0, 0},
     {NM_ITEM, (STRPTR)"New Tab", (STRPTR)"T", 0, 0, 0},
@@ -2058,7 +1885,6 @@ static struct NewMenu nm[] = {
     {NM_ITEM, (STRPTR)"Smaller Text", (STRPTR)"-", 0, 0, 0},
     {NM_ITEM, (STRPTR)"Default Size", (STRPTR)"0", 0, 0, 0},
     {NM_ITEM, (STRPTR)"Font...", (STRPTR)"F", 0, 0, 0},
-    {NM_ITEM, (STRPTR)"TrueType Font...", 0, 0, 0, 0},
     {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
     {NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, 0},
     {NM_END, 0, 0, 0, 0, 0}
@@ -2076,8 +1902,7 @@ static void do_item(int item)
     case 7: zoom(-1); break;
     case 8: zoom(0); break;
     case 9: font_requester(); break;
-    case 10: tt_requester(); break;
-    case 12: quitting = 1; break;
+    case 11: quitting = 1; break;
     }
 }
 
@@ -2153,7 +1978,6 @@ static int open_libs(void)
     if (!DiskfontBase) DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
     if (!AslBase) AslBase = OpenLibrary((STRPTR)"asl.library", 38);     /* optional */
     if (!UtilityBase) UtilityBase = OpenLibrary((STRPTR)"utility.library", 37);
-    if (!TTEngineBase) TTEngineBase = OpenLibrary((STRPTR)"ttengine.library", 7);  /* optional */
     return IntuitionBase && GfxBase && GadToolsBase && KeymapBase;
 }
 
@@ -2302,7 +2126,6 @@ int term_main(const char *selfpath)
             /* last tab gone: the window goes away; keep serving until
              * every shell has closed its handles */
             ClearMenuStrip(win);
-            if (ttfont) drop_tt();
             release_pens();
             CloseWindow(win);
             win = NULL;
@@ -2369,8 +2192,7 @@ int term_main(const char *selfpath)
                 }
             }
             if (win && win->RPort->Font != font) {
-                /* setfont in a tab: that bitmap font replaces TrueType */
-                if (ttfont) drop_tt();
+                /* setfont in a tab */
                 layout();
             }
             if (win && sb_dirty) update_scroller();

@@ -22,9 +22,10 @@ Terminal: a window with tabs, each running its own bash.  Amiga-T or the
 "+" opens a tab, Amiga-W or a tab's "x" closes it, Amiga-1..9 switches.
 Amiga-+/- zoom the text: the supplied AmiBashMono font (DejaVu Sans Mono
 drawn for every size from 10 to 43 pixels) stays sharp at every step.
-With ttengine.library (Aminet util/libs/ttengine) installed, TrueType
-fonts are drawn anti-aliased on RTG screens; DejaVuSansMono.ttf is
-included.
+On RTG screens it uses an installed monospaced TrueType font, which
+AAText (Aminet util/wb/AAText, OS 3.2) draws anti-aliased; install the
+included DejaVuSansMono.ttf with AATextManager.  AGA/ECS screens keep
+the AmiBashMono bitmap fonts.
 The program is pure (re-entrant), so the tabs share one copy of the code,
 and it can be made resident.
 

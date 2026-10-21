@@ -157,31 +157,28 @@ picks *AmiBashMonoNL*, the same font drawn for that pixel shape. Copy
 shrinks to keep its columns and rows, as far as the screen allows. The
 choice is saved (`ENVARC:AMIBASH_FONT`, e.g. `AmiBashMono/19`) and used
 next time; any fixed-width font works, including outline fonts, which
-can be any size. OS 3.x cannot anti-alias text, but on a high-resolution
-RTG screen the larger sizes look much like a Mac terminal.
+can be any size.
 `tools/ttf2amigafont.py` makes such a family from any monospaced
 TrueType font.
 
-**TrueType.** If [ttengine.library](https://aminet.net/package/util/libs/ttengine)
-(free, Aminet `util/libs/ttengine`; 68020+) is installed, the terminal
-draws TrueType fonts itself, anti-aliased on 15-bit and deeper RTG
-screens (Picasso96 / CyberGraphX) - the closest to a Mac terminal. Any
-pixel size works, so Amiga-+/- zoom in single steps. On such a screen it
-uses `DejaVuSansMono.ttf` (supplied in `Fonts/`) by default when it finds
-it in `PROGDIR:Fonts`, `FONTS:`, `FONTS:_TrueType` or `FONTS:TrueType`,
-or "DejaVu Sans Mono" from ttengine's font database. *Terminal >
-TrueType Font...* opens ttengine's requester (monospaced fonts only); it
-lists the fonts in ttengine's database, made with the TTEManager tool from
-the same archive - without a database it offers a file requester for
-`.ttf`/`.otf` files instead. If ttengine.library cannot be opened, the
-menu item says why (not in `LIBS:`, or the PowerPC build from the
-archive's `Libs_OS4`/`Libs_MOS` instead of `Libs_68k`).
-`setenv AMIBASH_FONT Work:Fonts/MyMono.ttf/18` picks a file directly.
+**TrueType on RTG.** For smooth, anti-aliased text like a Mac terminal,
+use [AAText](https://aminet.net/package/util/wb/AAText) (free, Aminet
+`util/wb/AAText`; AmigaOS 3.2, 68020+, RTG). It patches graphics.library
+so that every program, the terminal included, draws TrueType fonts
+anti-aliased on 15-bit and deeper RTG screens; fixed-width fonts keep
+their character cells, so the terminal grid stays exact. Install a
+monospaced TrueType font with AATextManager (or FTManager), e.g.
+`DejaVuSansMono.ttf` from `Fonts/`, and start AAText (`Run >NIL: C:AAText`
+in `S:Startup-Sequence` before `LoadWB`). On an RTG screen the terminal
+then picks such a font by itself (DejaVu Sans Mono, JetBrains Mono,
+Liberation Mono, Ubuntu Mono, ... or any installed font with "Mono" in
+its name), and Amiga-+/- zoom it a pixel or two at a time. Without AAText
+the same font is still drawn, just without anti-aliasing. On palette
+(AGA/ECS) screens the terminal stays with the AmiBashMono bitmap fonts.
+RTG and palette screens remember their font separately:
+`ENVARC:AMIBASH_RTGFONT` and `ENVARC:AMIBASH_FONT`.
 Bold is drawn by overprinting, colours are the 16 standard ANSI colours
 (exact pens on RTG and 8-bit screens, the nearest on 4-colour ones).
-ttengine needs `locale.library`, `mathieeesingtrans.library` and
-`cybergraphics.library` (Picasso96 provides one), all standard on a
-3.x RTG system.
 
 Each tab keeps the last 300 lines that scrolled off the top; set
 `AMIBASH_SCROLLBACK` (e.g. `setenv AMIBASH_SCROLLBACK 1000`, or 0 for none)
