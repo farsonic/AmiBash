@@ -1945,11 +1945,76 @@ static void font_requester(void)
 }
 
 /* "TrueType Font...": ttengine's requester, monospaced fonts only */
+/* ttengine.library would not open: find out why and tell the user */
+static void tt_explain(void)
+{
+    struct EasyStruct es;
+    char msg[400];
+    struct Library *l;
+    BPTR fh = Open((STRPTR)"LIBS:ttengine.library", MODE_OLDFILE);
+    ULONG magic = 0;
+    if (fh) {
+        Read(fh, &magic, 4);
+        Close(fh);
+    }
+    if (!fh)
+        strcpy(msg, "ttengine.library is not in LIBS:.\n\n"
+                    "Get util/libs/ttengine.lha from Aminet and copy\n"
+                    "ttengine-7.1/Libs_68k/ttengine.library to LIBS:");
+    else if (magic != 0x000003F3)
+        strcpy(msg, "LIBS:ttengine.library is not the 68k version\n"
+                    "(the archive also has PowerPC ones for OS4 and MorphOS).\n\n"
+                    "Copy ttengine-7.1/Libs_68k/ttengine.library to LIBS:");
+    else if ((l = OpenLibrary((STRPTR)"ttengine.library", 0)) != NULL) {
+        sprintf(msg, "LIBS:ttengine.library is version %d; version 7 is needed.", (int)l->lib_Version);
+        CloseLibrary(l);
+    } else
+        strcpy(msg, "LIBS:ttengine.library is there but did not start.\n\n"
+                    "It needs a 68020 or better, mathieeesingbas.library\n"
+                    "and mathieeesingtrans.library (in LIBS:), and ENV:.");
+    es.es_StructSize = sizeof(es);
+    es.es_Flags = 0;
+    es.es_Title = (UBYTE *)"AmiBash Terminal";
+    es.es_TextFormat = (UBYTE *)"%s";
+    es.es_GadgetFormat = (UBYTE *)"OK";
+    EasyRequest(win, &es, NULL, (ULONG)msg);
+}
+
 static void tt_requester(void)
 {
     struct TagItem tg[6], *res;
     APTR rq;
-    if (!TTEngineBase || !UtilityBase || !win || !(rq = tt_AllocRequest(TTEngineBase))) {
+    if (!TTEngineBase) {
+        /* it may have been installed since the terminal started */
+        TTEngineBase = OpenLibrary((STRPTR)"ttengine.library", 7);
+        if (!TTEngineBase) {
+            tt_explain();
+            return;
+        }
+    }
+    {
+        /* ttengine's requester lists only fonts in its database (made
+         * with TTEManager); without one, pick a .ttf file instead */
+        BPTR db = Lock((STRPTR)"ENV:ttengine.database", SHARED_LOCK);
+        if (db) UnLock(db);
+        else if (AslBase && win) {
+            struct FileRequester *fr = AllocAslRequestTags(
+                ASL_FileRequest, ASLFR_Window, (ULONG)win, ASLFR_TitleText, (ULONG)"Terminal font (TrueType file)",
+                ASLFR_InitialDrawer, (ULONG)"FONTS:", ASLFR_InitialPattern, (ULONG)"#?.(ttf|otf)",
+                ASLFR_DoPatterns, TRUE, TAG_END);
+            if (fr) {
+                if (AslRequest(fr, NULL)) {
+                    char spec[200];
+                    sprintf(spec, "%.150s", (char *)fr->fr_Drawer);
+                    AddPart((STRPTR)spec, fr->fr_File, sizeof(spec));
+                    if (!use_tt(spec, ttfont ? tt_size : tt_default, 1, 1)) DisplayBeep(scr);
+                }
+                FreeAslRequest(fr);
+            }
+            return;
+        }
+    }
+    if (!UtilityBase || !win || !(rq = tt_AllocRequest(TTEngineBase))) {
         DisplayBeep(scr);
         return;
     }
@@ -2173,7 +2238,6 @@ int term_main(const char *selfpath)
     SetFont(win->RPort, font);
     obtain_pens();
     choose_font();
-    if (!TTEngineBase) nm[11].nm_Flags = NM_ITEMDISABLED;
     menus = CreateMenus(nm, TAG_END);
     if (menus && LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_END)) SetMenuStrip(win, menus);
     pubport = CreateMsgPort();

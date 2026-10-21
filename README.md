@@ -170,7 +170,12 @@ pixel size works, so Amiga-+/- zoom in single steps. On such a screen it
 uses `DejaVuSansMono.ttf` (supplied in `Fonts/`) by default when it finds
 it in `PROGDIR:Fonts`, `FONTS:`, `FONTS:_TrueType` or `FONTS:TrueType`,
 or "DejaVu Sans Mono" from ttengine's font database. *Terminal >
-TrueType Font...* opens ttengine's requester (monospaced fonts only);
+TrueType Font...* opens ttengine's requester (monospaced fonts only); it
+lists the fonts in ttengine's database, made with the TTEManager tool from
+the same archive - without a database it offers a file requester for
+`.ttf`/`.otf` files instead. If ttengine.library cannot be opened, the
+menu item says why (not in `LIBS:`, or the PowerPC build from the
+archive's `Libs_OS4`/`Libs_MOS` instead of `Libs_68k`).
 `setenv AMIBASH_FONT Work:Fonts/MyMono.ttf/18` picks a file directly.
 Bold is drawn by overprinting, colours are the 16 standard ANSI colours
 (exact pens on RTG and 8-bit screens, the nearest on 4-colour ones).
