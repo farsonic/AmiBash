@@ -12,6 +12,10 @@ cp build/bash.pure "$R/AmiBash/bash"
 cp build/bash020.pure "$R/AmiBash/bash020"
 cp dist/bash.info "$R/AmiBash/"
 cp contrib/installttf/InstallTTF "$R/AmiBash/"
+cp dist/Install-AmiBash "$R/AmiBash/"
+python3 tools/mkicon.py "$R/AmiBash/Install-AmiBash.info" Installer APPNAME=AmiBash MINUSER=AVERAGE >/dev/null
+mkdir -p "$R/AmiBash/Icons"
+python3 tools/mkicon.py "$R/AmiBash/Icons/AmiBash Terminal.info" C:bash >/dev/null
 cp -r dist/Fonts "$R/AmiBash/"
 cp tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py "$R/AmiBash/tools/"
 cp dist/S/bashrc "$R/AmiBash/S/"

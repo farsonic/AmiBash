@@ -1,0 +1,141 @@
+; $VER: Install-AmiBash 1.0 (21.10.2026)
+;
+; Installs AmiBash with the standard Amiga Installer (OS 3.x) or
+; InstallerLG.  Double-click its icon, or from the Shell:
+;   Installer Install-AmiBash APPNAME AmiBash
+
+(set @app-name "AmiBash")
+(set @default-dest "C:")
+
+; the 68020 build where it can run
+(set #cpu (database "cpu"))
+(if (patmatch "680[01]0" #cpu) (set #bin "bash") (set #bin "bash020"))
+
+; the archive's drawer: where this script was started from
+(set #here (pathonly @icon))
+(if (= #here "") (set #here (expandpath "")))
+(set #engine
+  (if (exists "LIBS:aatext.library") "aatext"
+    (if (exists "LIBS:freetype2.library") "freetype2" "")))
+
+(message
+  "AmiBash: GNU bash for AmigaOS, with its own tabbed terminal.\n\n"
+  "This installs bash in C: (the " #bin " version for your " #cpu "), "
+  "fonts for the terminal, and if you like a TrueType font for smooth "
+  "text on RTG screens with AAText (Aminet util/wb/AAText).\n\n"
+  "On the next page choose what to install.")
+
+(set #opts
+  (askoptions
+    (prompt "Which parts of AmiBash should be installed?")
+    (help
+      "bash in C: - the shell itself; it is also the terminal (bash --term, or "
+      "double-click its icon).\n\n"
+      "S:bashrc - an example settings file read by every new bash.\n\n"
+      "AmiBashMono fonts - sharp bitmap fonts in every size, used by the "
+      "terminal on AGA/ECS screens.\n\n"
+      "InstallTTF - a Shell tool that installs TrueType fonts for "
+      "diskfont.library (like AATextManager or FTManager, without ReAction).\n\n"
+      "DejaVu Sans Mono - a TrueType font the terminal uses on RTG screens; "
+      "AAText draws it anti-aliased. Needs aatext.library (from AAText) or "
+      "freetype2.library in LIBS:.\n\n"
+      "AmiBash Terminal icon - in SYS:Tools, to open the terminal from "
+      "Workbench.\n\n"
+      "Resident - loads bash once at startup (S:User-Startup), so every bash "
+      "and terminal tab shares one copy in memory and starts at once.")
+    (choices
+      "bash in C:"
+      "Example settings file S:bashrc"
+      "AmiBashMono fonts in FONTS:"
+      "InstallTTF in C:"
+      "DejaVu Sans Mono TrueType font"
+      "AmiBash Terminal icon in SYS:Tools"
+      "Make bash resident at startup")
+    (default 63)))
+
+; ---- bash --------------------------------------------------------------
+(if (in #opts 0)
+  (copyfiles
+    (prompt "Copying bash to C:")
+    (help @copyfiles-help)
+    (source (tackon #here #bin))
+    (dest "C:")
+    (newname "bash")
+    (nogauge)))
+
+; ---- S:bashrc --------------------------------------------------------
+(if (in #opts 1)
+  (if (exists "S:bashrc")
+    (if (askbool
+          (prompt "S:bashrc exists already. Replace it with the example?\n"
+                  "(Your file is kept as S:bashrc.old.)")
+          (help "The example is in S/bashrc in this archive; you can compare "
+                "the two later.")
+          (default 0))
+      (
+        (copyfiles (source "S:bashrc") (dest "S:") (newname "bashrc.old") (nogauge))
+        (copyfiles (source (tackon #here "S/bashrc")) (dest "S:") (nogauge))
+      ))
+    (copyfiles (source (tackon #here "S/bashrc")) (dest "S:") (nogauge))))
+
+; ---- the bitmap fonts --------------------------------------------------
+(if (in #opts 2)
+  (
+    (copyfiles (source (tackon #here "Fonts")) (dest "FONTS:")
+      (choices "AmiBashMono.font" "AmiBashMonoNL.font") (nogauge))
+    (if (= (exists "FONTS:AmiBashMono") 0) (makedir "FONTS:AmiBashMono"))
+    (copyfiles (source (tackon #here "Fonts/AmiBashMono")) (dest "FONTS:AmiBashMono") (all) (nogauge))
+    (if (= (exists "FONTS:AmiBashMonoNL") 0) (makedir "FONTS:AmiBashMonoNL"))
+    (copyfiles (source (tackon #here "Fonts/AmiBashMonoNL")) (dest "FONTS:AmiBashMonoNL") (all) (nogauge))
+  ))
+
+; ---- InstallTTF ----------------------------------------------------------
+(if (in #opts 3)
+  (copyfiles (source (tackon #here "InstallTTF")) (dest "C:") (nogauge)))
+
+; ---- the TrueType font -------------------------------------------------
+(if (in #opts 4)
+  (
+    (if (= #engine "")
+      (
+        (message
+          "Neither aatext.library nor freetype2.library is in LIBS:.\n\n"
+          "The font is installed for aatext.library; it can be used once you "
+          "copy Libs/aatext.library from the AAText archive (Aminet "
+          "util/wb/AAText) to LIBS:.")
+        (set #engine "aatext")
+      ))
+    (set #tool (if (exists "C:InstallTTF") "C:InstallTTF" (tackon #here "InstallTTF")))
+    (run
+      (cat "\"" #tool "\" \"" (tackon #here "Fonts/DejaVuSansMono.ttf") "\" COPY REPLACE NOCHECK ENGINE=" #engine " >NIL:")
+      (prompt "Installing DejaVu Sans Mono")
+      (help @run-help))
+    ; let programs see the new font rather than one still in memory
+    (run "Avail >NIL: FLUSH")
+  ))
+
+; ---- the Workbench icon ----------------------------------------------
+(if (in #opts 5)
+  (
+    (set #tools (if (exists "SYS:Tools") "SYS:Tools" "SYS:"))
+    (textfile
+      (dest (tackon #tools "AmiBash Terminal"))
+      (append "Double-click the icon to open the AmiBash Terminal (C:bash).\n"))
+    (copyfiles (source (tackon #here "Icons/AmiBash Terminal.info")) (dest #tools) (nogauge))
+  ))
+
+; ---- resident ---------------------------------------------------------
+(if (in #opts 6)
+  (startup "AmiBash"
+    (prompt "Adding \"Resident C:bash PURE\" to S:User-Startup")
+    (help @startup-help)
+    (command "Resident >NIL: C:bash PURE\n")))
+
+(exit
+  "AmiBash is installed.\n\n"
+  "Open a Shell and type bash, or double-click the AmiBash Terminal icon "
+  "(or type bash --term).\n\n"
+  "For smooth TrueType text: an RTG screen with 15 bits or more, and "
+  "AAText running (Aminet util/wb/AAText)."
+  (if (in #opts 6) "\n\nbash is made resident from the next reboot." "")
+  (quiet))

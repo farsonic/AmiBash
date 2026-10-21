@@ -34,7 +34,8 @@ and it can be made resident.
 Its behaviour is checked against GNU bash 5.2 with a test corpus, and it
 runs on 68000 with 1 MB (bash) or 68020+ (bash020).
 
-Install:  Copy bash TO C:        (or bash020 AS C:bash on 68020+)
+Install:  double-click Install-AmiBash (Amiga Installer), or by hand:
+          Copy bash TO C:        (or bash020 AS C:bash on 68020+)
           Copy S/bashrc TO S:    (optional)
           Copy Fonts/#? TO FONTS: ALL   (terminal font)
           then type "bash" in a Shell window, or "bash --term"

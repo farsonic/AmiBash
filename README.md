@@ -38,6 +38,16 @@ fork-dependent features are emulated:
 
 ## Installing
 
+The easy way: double-click **Install-AmiBash** (uses the standard Amiga
+Installer, in `SYS:Utilities` or `C:` on OS 3.x). It picks the 68000 or
+68020 build for your CPU and lets you choose what to install: bash in
+`C:`, the example `S:bashrc` (an existing one is kept as `S:bashrc.old`),
+the AmiBashMono fonts, `InstallTTF`, the DejaVu Sans Mono TrueType font for
+smooth text with AAText on RTG, an *AmiBash Terminal* icon in `SYS:Tools`,
+and optionally `Resident C:bash PURE` in `S:User-Startup`.
+
+By hand:
+
 1. Copy `bash` (68000 build) or `bash020` (68020+, renamed to `bash`) to `C:`.
    For Workbench, copy `bash` and `bash.info` to a drawer (e.g. `SYS:Utilities`).
 2. Optionally copy `S/bashrc` to `S:bashrc` (system-wide startup file).
