@@ -125,6 +125,9 @@ static struct Menu *menus;
 static APTR vi;
 static struct DrawInfo *dri;
 static struct TextFont *font;
+static struct TextFont *ownfont;     /* the terminal's font, opened by us */
+static struct TextFont *boldfont;    /* its bold face (TrueType), if any */
+static int scalable;                 /* a TrueType (.otag) font          */
 static int cw = 8, chh = 8, base = 6;
 static int cols = 80, rows = 24;
 static int tabh;                 /* tab bar height                     */
@@ -260,9 +263,17 @@ static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
         while (x < x1 && at[x] == a) x++;
         set_pens(a);
         Move(win->RPort, s * cw, term_top() + y * chh + base);
-        txt(win->RPort, (const char *)&c[s], x - s);
-        /* bold and underline drawn by hand (no algorithmic soft styles) */
-        if (a & A_BOLD) {
+        if ((a & A_BOLD) && boldfont && win->RPort->Font == ownfont) {
+            /* TrueType: the font's own bold face */
+            SetFont(win->RPort, boldfont);
+            txt(win->RPort, (const char *)&c[s], x - s);
+            SetFont(win->RPort, ownfont);
+        } else
+            txt(win->RPort, (const char *)&c[s], x - s);
+        /* bold and underline drawn by hand (no algorithmic soft styles);
+         * overprinting smears anti-aliased TrueType letters, so a TrueType
+         * font without a bold face shows bold by its brighter colour only */
+        if ((a & A_BOLD) && !scalable) {
             SetDrMd(win->RPort, JAM1);
             Move(win->RPort, s * cw + 1, term_top() + y * chh + base);
             txt(win->RPort, (const char *)&c[s], x - s);
@@ -1555,9 +1566,7 @@ static void click(int x, int y)
 static char font_path[160];      /* "FONTS:AmiBashMono.font"           */
 static UWORD font_sizes[40];     /* its designed sizes, ascending      */
 static int nsizes;
-static int scalable;             /* TrueType (.otag): any size         */
 static UWORD font_default;       /* size for Amiga-0                   */
-static struct TextFont *ownfont; /* opened by us, closed on change     */
 
 /* screens whose pixels are twice as tall as wide (non-interlaced) */
 static int tall_pixels(void)
@@ -1694,6 +1703,23 @@ static int set_font(UWORD size, int save, int resize)
     if (ownfont) CloseFont(ownfont);
     ownfont = f;
     font = f;
+    if (boldfont) CloseFont(boldfont);
+    boldfont = NULL;
+    if (scalable && DiskfontBase) {
+        /* "Name Bold.font", as InstallTTF/AATextManager name it, on the
+         * same grid */
+        char bp[180];
+        struct TextFont *b;
+        sprintf(bp, "%.*s Bold.font", (int)strlen(font_path) - 5, font_path);
+        ta.ta_Name = (STRPTR)NEARP(bp);
+        if ((b = OpenDiskFont(&ta)) != NULL) {
+            if (b->tf_XSize == f->tf_XSize && b->tf_YSize == f->tf_YSize && b->tf_Baseline == f->tf_Baseline &&
+                !(b->tf_Flags & FPF_PROPORTIONAL))
+                boldfont = b;
+            else
+                CloseFont(b);
+        }
+    }
     if (save) {
         fp = FilePart((STRPTR)NEARP(font_path));
         sprintf(v, "%.*s", (int)(strlen(fp) - 5), fp);
@@ -2214,7 +2240,10 @@ int term_main(const char *selfpath)
     if (menus) FreeMenus(menus);
     if (vi) FreeVisualInfo(vi);
     free_scroller();
+    if (boldfont) CloseFont(boldfont);
+    boldfont = NULL;
     if (ownfont) CloseFont(ownfont);
+    ownfont = NULL;
     if (dri) FreeScreenDrawInfo(scr, dri);
     FreeVec(tabs);
     tabs = NULL;

@@ -178,7 +178,10 @@ the same font is still drawn, just without anti-aliasing. On palette
 (AGA/ECS) screens the terminal stays with the AmiBashMono bitmap fonts.
 RTG and palette screens remember their font separately:
 `ENVARC:AMIBASH_RTGFONT` and `ENVARC:AMIBASH_FONT`.
-Bold is drawn by overprinting, colours are the 16 standard ANSI colours
+Bold uses the font's bold face when one is installed under the same name
+plus " Bold" (e.g. `InstallTTF DejaVuSansMono-Bold.ttf COPY`); without
+one, TrueType bold is shown by colour alone and bitmap fonts are
+overprinted. Colours are the 16 standard ANSI colours
 (exact pens on RTG and 8-bit screens, the nearest on 4-colour ones).
 
 Each tab keeps the last 300 lines that scrolled off the top; set
