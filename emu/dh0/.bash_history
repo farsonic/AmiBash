@@ -7,3 +7,7 @@ echo I am in Bash 2; pwd
 exit
 echo started from Workbench; echo args=$#
 exit
+echo $0 $BASH; ls | head -3; cd RAM: ; pwd
+version; dir C: | head -3; echo rc=$?
+exit
+argtest wb; echo $PATH

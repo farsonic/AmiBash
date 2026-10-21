@@ -64,6 +64,17 @@ void os_init(void)
     l = Lock("T:", SHARED_LOCK);
     if (l) UnLock(l);
     else strcpy(tmpdir, "RAM:");
+    {
+        /* a tab of the AmiBash Terminal inherits the terminal's error
+         * stream (Kickstart 3.1 ignores NP_Error): use the tab instead */
+        struct Process *p = me();
+        struct FileHandle *in = (struct FileHandle *)BADDR(Input());
+        struct FileHandle *ces = (struct FileHandle *)BADDR(p->pr_CES);
+        char b[4];
+        if (ces && in && in->fh_Type == p->pr_ConsoleTask && ces->fh_Type != p->pr_ConsoleTask &&
+            GetVar((STRPTR)"AMIBASH_TERM", (STRPTR)b, sizeof(b), GVF_LOCAL_ONLY) >= 0)
+            p->pr_CES = 0;
+    }
 }
 
 void os_cleanup(void)
@@ -660,6 +671,9 @@ int os_run(const char *path, char **argv, OsHandle in, OsHandle out, OsHandle er
         cwd_before = pr->pr_CurrentDir;
         pr->pr_WindowPtr = old_winptr;
         rc = RunCommand(seg, stack, (STRPTR)line, (LONG)(al + 1));
+        /* as the Shell does: write out what the command left buffered */
+        Flush(Output());
+        if (pr->pr_CES) Flush(pr->pr_CES);
         pr->pr_WindowPtr = (APTR)-1;
         if (cli) {
             cli->cli_ReturnCode = rc;
@@ -947,7 +961,7 @@ const char *os_default_path(void)
     if (path) return path;
     sb_init(&b);
     sb_adds(&b, "/C");
-    if (cli) {
+    if (cli && cli->cli_CommandDir) {
         BPTR *pn = (BPTR *)BADDR(cli->cli_CommandDir);
         int guard = 0;
         while (pn && guard++ < 64) {

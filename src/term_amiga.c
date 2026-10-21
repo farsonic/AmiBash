@@ -8,11 +8,11 @@
  *   - a DOS console handler (its own message port) that implements the
  *     packets a console must answer: read/write, raw/cooked mode,
  *     WaitForChar, Open("*"), Ctrl-C, window bounds report ...
- *   - a bash shell started with SystemTags() on file handles that point
- *     at that port, so every program run in the tab sees a normal
+ *   - a bash process (a CLI process of its own) on file handles that
+ *     point at that port, so every program run in the tab sees a normal
  *     interactive console.
  *
- * Shortcuts: Right-Amiga T new tab, W close tab, 1-9 select tab,
+ * Shortcuts (either Amiga key): T new tab, W close tab, 1-9 select tab,
  * [ ] previous/next tab, Q quit.  Shells can ask for tabs through the
  * public port "AmiBash.Terminal" (bashwin builtin, F1/F2 keys).
  */
@@ -117,13 +117,7 @@ static int pen_text = 2, pen_back = 1, pen_hi = 3;
 
 /* tab bar geometry */
 static int plus_w;
-static int shared;               /* tabs run our code as resident RESNAME */
 static int launched;             /* shells started successfully          */
-#ifdef AMIBASH_PURE
-static struct Segment *res_node; /* our entry in the resident list      */
-static LONG res_uc;              /* its use count when nobody runs it  */
-#endif
-#define RESNAME "AmiBash"
 
 /* ------------------------------------------------------------------ */
 /* small helpers                                                        */
@@ -854,8 +848,7 @@ static void step_tab(int dir)
 
 /* shell launch request, handled by a helper process */
 static struct {
-    char cmd[300];
-    BPTR in, out;
+    BPTR in, out, path;
     struct MsgPort *port;
     Tab *tab;
     struct Task *parent;
@@ -875,13 +868,33 @@ static APTR get_a4(void) = "\tmove.l\ta4,d0";
 #define get_a4() NULL
 #endif
 
-/* The Shell process needs little stack: bash itself runs on a 64 KB
- * stack of its own (see pure_amiga.c / __stack). */
+/* Start the tab's bash as a CLI process of its own.  The resident
+ * build is re-entrant, so it runs the code this terminal is running
+ * (no second copy in memory, no Shell, no resident list); otherwise the
+ * program is loaded again for each tab. */
 static void launcher(void)
 {
-    LONG r = SystemTags((STRPTR)NEARP(launch.cmd), SYS_Input, launch.in, SYS_Output, launch.out,
-                        SYS_Asynch, TRUE, SYS_UserShell, TRUE, NP_StackSize, 16384,
-                        NP_ConsoleTask, (ULONG)launch.port, NP_Name, (ULONG)"AmiBash", TAG_END);
+    LONG r = -1;
+    BPTR seg = 0;
+    BOOL own = TRUE;
+#ifdef AMIBASH_PURE
+    seg = pure_seglist();
+    if (seg) own = FALSE;
+#endif
+    if (!seg) seg = LoadSeg((STRPTR)NEARP(self));
+    if (seg) {
+        struct Process *p = CreateNewProcTags(
+            NP_Seglist, seg, NP_FreeSeglist, own, NP_Name, (ULONG)"AmiBash",
+            NP_Input, launch.in, NP_Output, launch.out, NP_CloseInput, TRUE, NP_CloseOutput, TRUE,
+            NP_Cli, TRUE, NP_CommandName, (ULONG)"bash", NP_Arguments, (ULONG)"-i --amiterm\n",
+            NP_Path, launch.path, NP_Error, launch.out, NP_CloseError, FALSE,
+            NP_ConsoleTask, (ULONG)launch.port, NP_StackSize, 65536, TAG_END);
+        if (p) {
+            r = 0;
+            launch.path = 0;                /* the new process owns it */
+        } else if (own)
+            UnLoadSeg(seg);
+    }
     Forbid();
     launch.result = r;
     launch.busy = 2;                        /* done */
@@ -895,13 +908,42 @@ static void launcher_entry(void)
     launcher();
 }
 
+/* a copy of this process's command path (Path), for a new shell */
+static BPTR copy_path(void)
+{
+    struct CommandLineInterface *cli = Cli();
+    BPTR head = 0, *link = &head;
+    BPTR *pn;
+    if (!cli) return 0;
+    for (pn = (BPTR *)BADDR(cli->cli_CommandDir); pn; pn = (BPTR *)BADDR(pn[0])) {
+        BPTR *n = AllocVec(2 * sizeof(BPTR), MEMF_PUBLIC | MEMF_CLEAR);
+        if (!n) break;
+        n[1] = DupLock(pn[1]);
+        *link = MKBADDR(n);
+        link = &n[0];
+    }
+    return head;
+}
+
+static void free_path(BPTR p)
+{
+    while (p) {
+        BPTR *n = (BPTR *)BADDR(p);
+        p = n[0];
+        if (n[1]) UnLock(n[1]);
+        FreeVec(n);
+    }
+}
+
 /* the helper finished: check the result */
 static void launch_done(void)
 {
     Tab *t;
     if (launch.busy != 2) return;
     t = launch.tab;
-    dbg("SystemTags(%s) = %ld", (LONG)launch.cmd, launch.result, 0);
+    dbg("launch = %ld", launch.result, 0, 0);
+    free_path(launch.path);                 /* if not handed over */
+    launch.path = 0;
     if (launch.result != -1) launched++;
     else if (t->used) {
         FreeDosObject(DOS_FILEHANDLE, BADDR(launch.in));
@@ -916,9 +958,7 @@ static int new_tab(void)
     int i;
     Tab *t = NULL;
     struct FileHandle *in, *out;
-    char cmd[300];
     struct Process *proc;
-    LONG r;
     for (i = 0; i < MAXTABS; i++)
         if (!tabs[i].used) {
             t = &tabs[i];
@@ -956,10 +996,8 @@ static int new_tab(void)
     in->fh_Port = out->fh_Port = (struct MsgPort *)DOSTRUE;
     in->fh_Arg1 = out->fh_Arg1 = (LONG)t;
     t->opencount = 2;
-    if (shared) strcpy(cmd, RESNAME " -i --amiterm");
-    else sprintf(cmd, "\"%s\" -i --amiterm", self);
-    /* SystemTags() talks to the new console (this process) before it
-     * returns, so it must run in a helper process */
+    /* starting a process may talk to its console (this process), so
+     * it is done by a helper process */
     if (launch.busy) {
         FreeDosObject(DOS_FILEHANDLE, in);
         FreeDosObject(DOS_FILEHANDLE, out);
@@ -967,10 +1005,10 @@ static int new_tab(void)
         tab_free(t);
         return -1;
     }
-    strcpy(launch.cmd, cmd);
     launch.in = MKBADDR(in);
     launch.out = MKBADDR(out);
     launch.port = t->port;
+    launch.path = copy_path();
     launch.tab = t;
     launch.parent = FindTask(NULL);
     launch.busy = 1;
@@ -981,13 +1019,14 @@ static int new_tab(void)
     Permit();
     if (!proc) {
         launch.busy = 0;
+        free_path(launch.path);
+        launch.path = 0;
         FreeDosObject(DOS_FILEHANDLE, in);
         FreeDosObject(DOS_FILEHANDLE, out);
         t->opencount = 0;
         tab_free(t);
         return -1;
     }
-    (void)r;
     t->started = 1;
     ntabs_open++;
     select_tab(i);
@@ -1340,7 +1379,7 @@ int term_main(const char *selfpath)
     {
         char b[8];
         if (GetVar((STRPTR)"AMIBASH_TERMDEBUG", (STRPTR)b, sizeof(b), 0) >= 0)
-            dbgfh = Open((STRPTR)"Work:term.log", MODE_NEWFILE);
+            dbgfh = Open((STRPTR)"T:AmiBash-term.log", MODE_NEWFILE);
     }
     if (!open_libs()) return term_fail("needs gadtools.library and keymap.library V37");
     strncpy(self, selfpath, sizeof(self) - 1);
@@ -1350,21 +1389,6 @@ int term_main(const char *selfpath)
     }
     tabs = AllocVec(MAXTABS * sizeof(Tab), MEMF_ANY | MEMF_CLEAR);
     if (!tabs) return term_fail("out of memory");
-#ifdef AMIBASH_PURE
-    {
-        /* share this loaded copy of the program with the tabs: as a
-         * resident command they need no memory for code of their own */
-        BPTR seg = pure_seglist();
-        Forbid();
-        if (FindSegment((STRPTR)RESNAME, NULL, 0)) shared = 1;
-        else if (seg && AddSegment((STRPTR)RESNAME, seg, 0)) {
-            shared = 2;
-            res_node = FindSegment((STRPTR)RESNAME, NULL, 0);
-            res_uc = res_node ? res_node->seg_UC : 0;
-        }
-        Permit();
-    }
-#endif
     scr = LockPubScreen(NULL);
     if (!scr) return term_fail("cannot lock the screen");
     dri = GetScreenDrawInfo(scr);
@@ -1523,38 +1547,9 @@ int term_main(const char *selfpath)
     if (dri) FreeScreenDrawInfo(scr, dri);
     FreeVec(tabs);
     tabs = NULL;
-#ifdef AMIBASH_PURE
-    if (shared == 2) {
-        /* Unlink our resident entry once no shell uses it any more.  Not
-         * RemSegment(): on some systems it also unloads the code, which
-         * here is this running program (the CLI or Workbench unloads it
-         * when we return).  The small node itself is left allocated. */
-        struct DosInfo *di = BADDR(DOSBase->dl_Root->rn_Info);
-        /* the list head is di_NetHand on Kickstart and AROS, although
-         * the includes name di_McName: look in both */
-        BPTR *heads[2];
-        heads[0] = (BPTR *)&di->di_NetHand;
-        heads[1] = &di->di_McName;
-        for (;;) {
-            struct Segment *sg = NULL, *prev = NULL;
-            int h, busy = 0;
-            Forbid();
-            for (h = 0; h < 2 && sg != res_node; h++) {
-                prev = NULL;
-                for (sg = BADDR(*heads[h]); sg; prev = sg, sg = BADDR(sg->seg_Next))
-                    if (sg == res_node) break;
-            }
-            if (sg && sg->seg_UC > res_uc) busy = 1;
-            else if (sg) {
-                if (prev) prev->seg_Next = sg->seg_Next;
-                else *heads[h - 1] = sg->seg_Next;
-            }
-            Permit();
-            if (!busy) break;
-            Delay(10);
-        }
-    }
-#endif
+    /* the last shells have closed their handles, so they are past our
+     * code; give them a moment to finish exiting before it is unloaded */
+    Delay(10);
     if (!launched) return term_fail("cannot start a shell (out of memory?)");
     return 0;
 }
