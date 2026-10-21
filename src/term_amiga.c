@@ -27,6 +27,9 @@
 #include <dos/dostags.h>
 #include <intuition/intuition.h>
 #include <intuition/screens.h>
+#include <intuition/gadgetclass.h>
+#include <intuition/imageclass.h>
+#include <intuition/icclass.h>
 #include <graphics/gfxbase.h>
 #include <graphics/text.h>
 #include <graphics/rastport.h>
@@ -38,6 +41,7 @@
 #include <proto/gadtools.h>
 #include <proto/keymap.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include "sh.h"
 
@@ -92,6 +96,13 @@ typedef struct Tab {
     int ll;
     PktNode *reads, *waits;
     struct Task *reader;         /* gets Ctrl-C                        */
+    /* scrollback: a ring of lines that scrolled off the top */
+    UBYTE *hch;
+    UWORD *hat;
+    int hw, hlines;              /* line width, capacity               */
+    int hcount, hhead;           /* lines stored, next slot            */
+    int hfail;                   /* no memory for it                   */
+    int view;                    /* lines scrolled back (0: live)      */
 } Tab;
 
 static Tab *tabs;                /* MAXTABS of them                    */
@@ -117,6 +128,14 @@ static int pen_text = 2, pen_back = 1, pen_hi = 3;
 
 /* tab bar geometry */
 static int plus_w;
+
+/* scroller in the right window border */
+static int sb_lines = 300;       /* scrollback lines per tab           */
+static Object *sb_prop, *sb_up, *sb_down;
+static Object *img_size, *img_up, *img_down;
+static int sb_dirty;             /* prop needs updating                */
+static int sb_held;              /* arrow held down: -1 up, +1 down    */
+static LONG sb_settop = -1;      /* last top we set                    */
 static int launched;             /* shells started successfully          */
 
 /* ------------------------------------------------------------------ */
@@ -166,23 +185,22 @@ static void set_pens(UWORD a)
     SetDrMd(win->RPort, JAM2);
 }
 
-/* draw cells [x0, x1) of row y */
-static void draw_run(Tab *t, int y, int x0, int x1)
+/* draw cells [x0, x1) of the line c/a at display row y */
+static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
 {
     int x = x0;
-    if (!t || t != active() || !win) return;
     while (x < x1) {
-        UWORD a = t->at[y * cols + x];
+        UWORD a = at[x];
         int s = x;
-        while (x < x1 && t->at[y * cols + x] == a) x++;
+        while (x < x1 && at[x] == a) x++;
         set_pens(a);
         Move(win->RPort, s * cw, term_top() + y * chh + base);
-        Text(win->RPort, (STRPTR)&t->ch[y * cols + s], x - s);
+        Text(win->RPort, (STRPTR)&c[s], x - s);
         /* bold and underline drawn by hand (no algorithmic soft styles) */
         if (a & A_BOLD) {
             SetDrMd(win->RPort, JAM1);
             Move(win->RPort, s * cw + 1, term_top() + y * chh + base);
-            Text(win->RPort, (STRPTR)&t->ch[y * cols + s], x - s);
+            Text(win->RPort, (STRPTR)&c[s], x - s);
             SetDrMd(win->RPort, JAM2);
         }
         if (a & A_ULINE) {
@@ -192,10 +210,33 @@ static void draw_run(Tab *t, int y, int x0, int x1)
     }
 }
 
+/* draw cells [x0, x1) of screen row y (not while scrolled back) */
+static void draw_run(Tab *t, int y, int x0, int x1)
+{
+    if (!t || t != active() || !win || t->view) return;
+    draw_cells(y, t->ch + y * cols, t->at + y * cols, x0, x1);
+}
+
+/* the line shown at display row y: scrollback or screen; its width */
+static int disp_row(Tab *t, int y, UBYTE **c, UWORD **a)
+{
+    int v = t->hcount - t->view + y;
+    if (v < t->hcount) {
+        int idx = (t->hhead - t->hcount + v + t->hlines) % t->hlines;
+        *c = t->hch + idx * t->hw;
+        *a = t->hat + idx * t->hw;
+        return t->hw < cols ? t->hw : cols;
+    }
+    v -= t->hcount;
+    *c = t->ch + v * cols;
+    *a = t->at + v * cols;
+    return cols;
+}
+
 static void draw_cursor(Tab *t)
 {
     int x, y;
-    if (!t || t != active() || !t->cursor_on || !win) return;
+    if (!t || t != active() || !t->cursor_on || !win || t->view) return;
     x = t->cx < cols ? t->cx : cols - 1;
     y = t->cy;
     SetDrMd(win->RPort, COMPLEMENT);
@@ -210,8 +251,165 @@ static void redraw_tab(Tab *t)
     if (!t || !win) return;
     SetAPen(win->RPort, A_BG(def_attr));
     RectFill(win->RPort, 0, term_top(), win->GZZWidth - 1, win->GZZHeight - 1);
-    for (y = 0; y < rows; y++) draw_run(t, y, 0, cols);
+    for (y = 0; y < rows; y++) {
+        UBYTE *c;
+        UWORD *a;
+        int w = disp_row(t, y, &c, &a);
+        draw_cells(y, c, a, 0, w);
+    }
     draw_cursor(t);
+}
+
+/* ------------------------------------------------------------------ */
+/* scrollback                                                           */
+
+/* keep screen row y, which is about to scroll off the top */
+static void hist_push(Tab *t, int y)
+{
+    int i, w;
+    UBYTE *c;
+    UWORD *a;
+    if (!t->hch) {
+        if (!sb_lines || t->hfail) return;
+        t->hw = cols;
+        t->hlines = sb_lines;
+        t->hch = AllocVec(t->hlines * t->hw, MEMF_ANY);
+        t->hat = AllocVec(t->hlines * t->hw * sizeof(UWORD), MEMF_ANY);
+        if (!t->hch || !t->hat) {
+            if (t->hch) FreeVec(t->hch);
+            if (t->hat) FreeVec(t->hat);
+            t->hch = NULL;
+            t->hat = NULL;
+            t->hfail = 1;
+            return;
+        }
+    }
+    c = t->hch + t->hhead * t->hw;
+    a = t->hat + t->hhead * t->hw;
+    w = cols < t->hw ? cols : t->hw;
+    memcpy(c, t->ch + y * cols, w);
+    memcpy(a, t->at + y * cols, w * sizeof(UWORD));
+    for (i = w; i < t->hw; i++) {
+        c[i] = ' ';
+        a[i] = def_attr;
+    }
+    t->hhead = (t->hhead + 1) % t->hlines;
+    if (t->hcount < t->hlines) t->hcount++;
+    /* scrolled back: the view stays on the same lines */
+    if (t->view && t->view < t->hcount) t->view++;
+    if (t == active()) sb_dirty = 1;
+}
+
+/* scroll the view back (n > 0) or forward (n < 0) */
+static void scroll_view(Tab *t, int n)
+{
+    int v;
+    if (!t) return;
+    v = t->view + n;
+    if (v > t->hcount) v = t->hcount;
+    if (v < 0) v = 0;
+    if (v == t->view) return;
+    n = v - t->view;
+    t->view = v;
+    sb_dirty = 1;
+    if (t != active() || !win) return;
+    if (n < rows && -n < rows) {
+        /* move what is shown and draw only the lines that come in */
+        int y, y0 = n > 0 ? 0 : rows + n, y1 = n > 0 ? n : rows;
+        SetBPen(win->RPort, A_BG(def_attr));
+        ScrollRaster(win->RPort, 0, -n * chh, 0, term_top(), cols * cw - 1, term_top() + rows * chh - 1);
+        for (y = y0; y < y1; y++) {
+            UBYTE *c;
+            UWORD *a;
+            int w = disp_row(t, y, &c, &a);
+            draw_cells(y, c, a, 0, w);
+        }
+        if (!v) draw_cursor(t);
+    } else
+        redraw_tab(t);
+}
+
+/* show the scroller for the active tab */
+static void update_scroller(void)
+{
+    Tab *t = active();
+    LONG total, top;
+    sb_dirty = 0;
+    if (!win || !sb_prop) return;
+    if (((struct Gadget *)sb_prop)->Flags & GFLG_SELECTED) {
+        sb_dirty = 1;                       /* being dragged: later */
+        return;
+    }
+    total = t ? t->hcount + rows : rows;
+    top = t ? t->hcount - t->view : 0;
+    sb_settop = top;
+    SetGadgetAttrs((struct Gadget *)sb_prop, win, NULL, PGA_Total, total, PGA_Visible, rows,
+                   PGA_Top, top, TAG_END);
+}
+
+/* the user moved the scroller */
+static void scroller_moved(void)
+{
+    Tab *t = active();
+    ULONG top = 0;
+    if (!t || !sb_prop) return;
+    GetAttr(PGA_Top, sb_prop, &top);
+    if ((LONG)top == sb_settop) return;
+    sb_settop = top;
+    t->view = t->hcount - (int)top;
+    if (t->view < 0) t->view = 0;
+    if (t->view > t->hcount) t->view = t->hcount;
+    redraw_tab(t);
+}
+
+static void make_scroller(void)
+{
+    ULONG sw = 18, sh = 10, uh = 11, dh = 11, top;
+    ULONG size = (scr->Flags & SCREENHIRES) ? SYSISIZE_MEDRES : SYSISIZE_LOWRES;
+    img_size = NewObject(NULL, (UBYTE *)"sysiclass", SYSIA_DrawInfo, (ULONG)dri, SYSIA_Which, SIZEIMAGE,
+                         SYSIA_Size, size, TAG_END);
+    img_up = NewObject(NULL, (UBYTE *)"sysiclass", SYSIA_DrawInfo, (ULONG)dri, SYSIA_Which, UPIMAGE,
+                       SYSIA_Size, size, TAG_END);
+    img_down = NewObject(NULL, (UBYTE *)"sysiclass", SYSIA_DrawInfo, (ULONG)dri, SYSIA_Which, DOWNIMAGE,
+                         SYSIA_Size, size, TAG_END);
+    if (!img_size || !img_up || !img_down) return;
+    GetAttr(IA_Width, img_size, &sw);
+    GetAttr(IA_Height, img_size, &sh);
+    GetAttr(IA_Height, img_up, &uh);
+    GetAttr(IA_Height, img_down, &dh);
+    top = scr->WBorTop + scr->Font->ta_YSize + 1;
+    sb_prop = NewObject(NULL, (UBYTE *)"propgclass",
+                        GA_RelRight, -((LONG)sw - 5), GA_Top, top + 1, GA_Width, sw - 8,
+                        GA_RelHeight, -(LONG)(top + sh + uh + dh + 2), GA_RightBorder, TRUE, GA_GZZGadget, TRUE,
+                        GA_RelVerify, TRUE, GA_Immediate, TRUE, GA_ID, 1,
+                        PGA_Freedom, FREEVERT, PGA_NewLook, TRUE, PGA_Borderless, TRUE,
+                        PGA_Total, 1, PGA_Visible, 1, PGA_Top, 0,
+                        ICA_TARGET, ICTARGET_IDCMP, TAG_END);
+    sb_up = NewObject(NULL, (UBYTE *)"buttongclass", GA_Image, (ULONG)img_up,
+                      GA_RelRight, 1 - (LONG)sw, GA_RelBottom, 1 - (LONG)(sh + uh + dh),
+                      GA_RightBorder, TRUE, GA_GZZGadget, TRUE, GA_Previous, (ULONG)sb_prop,
+                      GA_RelVerify, TRUE, GA_Immediate, TRUE, GA_ID, 2, TAG_END);
+    sb_down = NewObject(NULL, (UBYTE *)"buttongclass", GA_Image, (ULONG)img_down,
+                        GA_RelRight, 1 - (LONG)sw, GA_RelBottom, 1 - (LONG)(sh + dh),
+                        GA_RightBorder, TRUE, GA_GZZGadget, TRUE, GA_Previous, (ULONG)sb_up,
+                        GA_RelVerify, TRUE, GA_Immediate, TRUE, GA_ID, 3, TAG_END);
+    if (!sb_prop || !sb_up || !sb_down) {
+        if (sb_down) DisposeObject(sb_down);
+        if (sb_up) DisposeObject(sb_up);
+        if (sb_prop) DisposeObject(sb_prop);
+        sb_prop = sb_up = sb_down = NULL;
+    }
+}
+
+static void free_scroller(void)
+{
+    if (sb_down) DisposeObject(sb_down);
+    if (sb_up) DisposeObject(sb_up);
+    if (sb_prop) DisposeObject(sb_prop);
+    if (img_down) DisposeObject(img_down);
+    if (img_up) DisposeObject(img_up);
+    if (img_size) DisposeObject(img_size);
+    sb_prop = sb_up = sb_down = img_size = img_up = img_down = NULL;
 }
 
 static void draw_tabbar(void)
@@ -308,12 +506,14 @@ static void clear_cells(Tab *t, int from, int to)
 
 static void scroll_up(Tab *t, int n)
 {
+    int k;
     if (n <= 0) return;
     if (n > rows) n = rows;
+    for (k = 0; k < n; k++) hist_push(t, k);
     memmove(t->ch, t->ch + n * cols, (rows - n) * cols);
     memmove(t->at, t->at + n * cols, (rows - n) * cols * sizeof(UWORD));
     clear_cells(t, (rows - n) * cols, rows * cols);
-    if (t == active() && win) {
+    if (t == active() && win && !t->view) {
         SetBPen(win->RPort, A_BG(t->attr));
         ScrollRaster(win->RPort, 0, n * chh, 0, term_top(), cols * cw - 1, term_top() + rows * chh - 1);
         if (win->GZZWidth > cols * cw || 1) {
@@ -822,6 +1022,7 @@ static void select_tab(int i)
     draw_tabbar();
     redraw_tab(&tabs[i]);
     update_title();
+    sb_dirty = 1;
 }
 
 static int visible_index(int k)
@@ -1054,6 +1255,8 @@ static void tab_free(Tab *t)
     }
     if (t->ch) FreeVec(t->ch);
     if (t->at) FreeVec(t->at);
+    if (t->hch) FreeVec(t->hch);
+    if (t->hat) FreeVec(t->hat);
     memset(t, 0, sizeof(*t));
 }
 
@@ -1133,6 +1336,17 @@ static void key_event(struct IntuiMessage *im)
     UWORD q = im->Qualifier;
     if (im->Code & IECODE_UP_PREFIX) return;
     /* Right-Amiga shortcuts that are not menu items */
+    /* mouse wheel (NewMouse codes) scrolls the view */
+    if (im->Code == 0x7A || im->Code == 0x7B) {
+        scroll_view(t, im->Code == 0x7A ? 3 : -3);
+        return;
+    }
+    /* Shift-Up / Shift-Down: a page back / forward (Amiga+cursor keys
+     * belong to Intuition: they move the mouse pointer) */
+    if ((q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) && (im->Code == 0x4C || im->Code == 0x4D)) {
+        scroll_view(t, im->Code == 0x4C ? rows - 1 : -(rows - 1));
+        return;
+    }
     if (q & IEQUALIFIER_RCOMMAND) {
         if (im->Code >= 0x01 && im->Code <= 0x09) {       /* 1..9 */
             int s = visible_index(im->Code - 1);
@@ -1164,6 +1378,7 @@ static void key_event(struct IntuiMessage *im)
     ie.ie_Qualifier = q;
     n = MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL);
     if (n <= 0) return;
+    if (t->view) scroll_view(t, -t->view);      /* typing: back to the bottom */
     if (n == 1 && buf[0] == 3) {
         /* Ctrl-C: break signal; raw-mode programs also get the char */
         if (t->raw) queue_input(t, buf, 1);
@@ -1230,6 +1445,7 @@ static void layout(void)
         cols = ncols;
         rows = nrows;
     }
+    sb_dirty = 1;
     draw_tabbar();
     if (active()) redraw_tab(active());
     else {
@@ -1377,9 +1593,10 @@ int term_main(const char *selfpath)
     int W, H, i;
     ULONG wsig, tsig, psig, all;
     {
-        char b[8];
-        if (GetVar((STRPTR)"AMIBASH_TERMDEBUG", (STRPTR)b, sizeof(b), 0) >= 0)
-            dbgfh = Open((STRPTR)"T:AmiBash-term.log", MODE_NEWFILE);
+        /* AMIBASH_TERMDEBUG=1 logs to T:AmiBash-term.log, or give a file */
+        char b[108];
+        if (GetVar((STRPTR)"AMIBASH_TERMDEBUG", (STRPTR)NEARP(b), sizeof(b), 0) >= 0)
+            dbgfh = Open((STRPTR)(strchr(b, ':') ? b : "T:AmiBash-term.log"), MODE_NEWFILE);
     }
     if (!open_libs()) return term_fail("needs gadtools.library and keymap.library V37");
     strncpy(self, selfpath, sizeof(self) - 1);
@@ -1402,6 +1619,15 @@ int term_main(const char *selfpath)
     if (!font) font = GfxBase->DefaultFont;
     /* dark theme by default (like most terminals): text pen 2 on pen 1 */
     def_attr = (UWORD)((pen_back << 3) | pen_text);
+    {
+        char b[12];
+        if (GetVar((STRPTR)"AMIBASH_SCROLLBACK", (STRPTR)b, sizeof(b), 0) > 0) {
+            sb_lines = atoi(b);
+            if (sb_lines < 0) sb_lines = 0;
+            if (sb_lines > 20000) sb_lines = 20000;
+        }
+    }
+    make_scroller();
     W = scr->Width - 40;
     H = (scr->Height - scr->BarHeight - 1) * 4 / 5;
     win = OpenWindowTags(NULL,
@@ -1410,14 +1636,19 @@ int term_main(const char *selfpath)
                          WA_MinWidth, 200, WA_MinHeight, 80, WA_MaxWidth, -1, WA_MaxHeight, -1,
                          WA_Title, (ULONG)"bash", WA_ScreenTitle, (ULONG)"AmiBash Terminal",
                          WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
-                         WA_SizeGadget, TRUE, WA_SizeBBottom, TRUE, WA_GimmeZeroZero, TRUE,
+                         WA_SizeGadget, TRUE, WA_SizeBRight, TRUE, WA_GimmeZeroZero, TRUE,
+                         WA_Gadgets, (ULONG)sb_prop,
                          WA_Activate, TRUE, WA_SmartRefresh, TRUE, WA_NewLookMenus, TRUE,
                          WA_PubScreen, (ULONG)scr,
                          WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MOUSEBUTTONS |
-                                       IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW,
+                                       IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW | IDCMP_GADGETDOWN |
+                                       IDCMP_GADGETUP | IDCMP_IDCMPUPDATE,
                          TAG_END);
     UnlockPubScreen(NULL, scr);
-    if (!win) return term_fail("cannot open the window (out of memory?)");
+    if (!win) {
+        free_scroller();
+        return term_fail("cannot open the window (out of memory?)");
+    }
     SetFont(win->RPort, font);
     menus = CreateMenus(nm, TAG_END);
     if (menus && LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_END)) SetMenuStrip(win, menus);
@@ -1503,6 +1734,14 @@ int term_main(const char *selfpath)
         if (timerport && GetMsg(timerport)) {
             timer_busy = 0;
             expire_waits();
+            if (sb_held && win) {
+                /* a scroller arrow held down: keep scrolling */
+                if (((struct Gadget *)(sb_held > 0 ? sb_up : sb_down))->Flags & GFLG_SELECTED) {
+                    scroll_view(active(), sb_held);
+                    start_timer();
+                } else
+                    sb_held = 0;
+            }
         }
         if (pubport) handle_pubmsg();
         if (win) {
@@ -1516,8 +1755,21 @@ int term_main(const char *selfpath)
                     ReplyMsg(&im->ExecMessage);
                     continue;
                 }
-                ReplyMsg(&im->ExecMessage);
+                {
+                    UWORD gid = (cl == IDCMP_GADGETDOWN || cl == IDCMP_GADGETUP)
+                                    ? ((struct Gadget *)im->IAddress)->GadgetID : 0;
+                    ReplyMsg(&im->ExecMessage);
+                    if (cl == IDCMP_GADGETDOWN && (gid == 2 || gid == 3)) {
+                        sb_held = gid == 2 ? 1 : -1;
+                        scroll_view(active(), sb_held);
+                        start_timer();              /* repeats while held */
+                    } else if (cl == IDCMP_GADGETUP) {
+                        sb_held = 0;
+                        if (gid == 1) scroller_moved();
+                    }
+                }
                 switch (cl) {
+                case IDCMP_IDCMPUPDATE: scroller_moved(); break;
                 case IDCMP_CLOSEWINDOW: quitting = 1; break;
                 case IDCMP_NEWSIZE: layout(); break;
                 case IDCMP_MENUPICK: menu_pick(code); break;
@@ -1527,6 +1779,7 @@ int term_main(const char *selfpath)
                 }
             }
             if (win && win->RPort->Font != font) layout();      /* setfont */
+            if (win && sb_dirty) update_scroller();
         }
     }
     if (pubport) {
@@ -1544,6 +1797,7 @@ int term_main(const char *selfpath)
     if (timerport) DeleteMsgPort(timerport);
     if (menus) FreeMenus(menus);
     if (vi) FreeVisualInfo(vi);
+    free_scroller();
     if (dri) FreeScreenDrawInfo(scr, dri);
     FreeVec(tabs);
     tabs = NULL;

@@ -142,9 +142,13 @@ use the new `bash.info`, or put that tool type in brackets.
 | **Amiga-1** … **Amiga-9**, or click a tab | go to that tab |
 | **Amiga-[** / **Amiga-]**, or `bashwin -n` | previous / next tab |
 | **Amiga-Q** or the close gadget | close all tabs and the window |
+| scroller, mouse wheel, **Shift-Up** / **Shift-Down** | scroll back through earlier output (a page at a time with Shift); typing returns to the bottom |
 
 The shortcuts work with either Amiga key and are also in the *Terminal*
-menu. A tab's title (and the window's) follows its current directory. The
+menu. Each tab keeps the last 300 lines that scrolled off the top; set
+`AMIBASH_SCROLLBACK` (e.g. `setenv AMIBASH_SCROLLBACK 1000`, or 0 for none)
+before starting the terminal to change that. While you are scrolled back
+the view stays put as new output arrives. A tab's title (and the window's) follows its current directory. The
 terminal understands the ANSI/xterm sequences bash and its tools use:
 colours, cursor movement, erasing, and window titles (`ESC ] 0 ; title BEL`).
 Inside it, `$TERM_PROGRAM` is `AmiBash`.
