@@ -47,6 +47,7 @@
 #include <proto/asl.h>
 #include <proto/utility.h>
 #include <string.h>
+#include "term.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include "sh.h"
@@ -76,6 +77,7 @@ struct TextFont *os_load_font(const char *fpath, int size);
 #define A_INV     0x200
 #define A_DEFFG   0x400          /* theme text colour, not ANSI fg     */
 #define A_DEFBG   0x800          /* theme background                   */
+#define A_SEL     0x8000         /* drawing only: inside the selection  */
 
 typedef struct PktNode { struct DosPacket *dp; long deadline; struct PktNode *next; } PktNode;
 
@@ -114,9 +116,36 @@ typedef struct Tab {
     int hcount, hhead;           /* lines stored, next slot            */
     int hfail;                   /* no memory for it                   */
     int view;                    /* lines scrolled back (0: live)      */
+    int sblines;                 /* scrollback capacity (profile)      */
+    /* profile */
+    int prof;                    /* id of its Profile                  */
+    /* selection, in line numbers counted from the oldest scrollback line
+     * (screen row y of the live view is line hcount + y) */
+    int sel_on;
+    int sl0, sc0, sl1, sc1;      /* anchor, other end (both inclusive) */
+    /* text being pasted, fed as the input queue has room */
+    char *paste;
+    long plen, ppos;
 } Tab;
 
 static Tab *tabs;                /* MAXTABS of them                    */
+static int new_tab_with(Profile *p);
+
+/* commands: menu items carry them as user data */
+enum {
+    CMD_NEWTAB = 1, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
+    CMD_COPY, CMD_PASTE, CMD_SELALL,
+    CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE, CMD_FONT,
+    CMD_PROFILE = 100                    /* + n: new tab with the n-th profile */
+};
+#define MAXPROFMENU 16
+
+static int selecting;            /* the mouse button is down in the text */
+static int sel_unit;             /* 0 characters, 1 words, 2 lines       */
+static ULONG last_secs, last_mics;
+static int last_l, last_c, clicks;
+static void redraw_lines(Tab *t, int la, int lb);
+
 static int ntabs_open;           /* visible tabs                       */
 static int cur = -1;             /* active tab index                   */
 static struct Window *win;
@@ -138,8 +167,11 @@ static struct timerequest *treq;
 static int timer_busy;
 static char self[256];
 static UWORD def_attr;           /* fg/bg of the theme                 */
-static int pen_text = 2, pen_back = 1, pen_hi = 3;
-static LONG ansipen[16];         /* ANSI colours 0-7, bright 8-15      */
+static LONG penv[NCOLORS] = {2, 1, 2, 3, 1, 3, 1};   /* pens of the active tab's profile */
+#define pen_text penv[C_FG]
+#define pen_back penv[C_BG]
+#define pen_hi   penv[C_CURSOR]
+static Profile *curprof;         /* the profile the pens are for        */
 static int pens_obtained;
 
 /* tab bar geometry */
@@ -186,17 +218,19 @@ static int term_top(void)
 /* ------------------------------------------------------------------ */
 /* drawing                                                              */
 
-/* pens for an attribute: the theme's, or the ANSI colour (bold: the
- * bright one) */
+/* pens for an attribute, from the profile: the default colours or the
+ * ANSI ones (bold: the Bold colour / the bright ANSI one, as the profile
+ * says) */
 static LONG pen_fg(UWORD a)
 {
-    if (a & A_DEFFG) return pen_text;
-    return ansipen[A_FG(a) + ((a & A_BOLD) ? 8 : 0)];
+    Profile *p = curprof;
+    if (a & A_DEFFG) return ((a & A_BOLD) && p && p->boldcolor) ? penv[C_BOLD] : penv[C_FG];
+    return penv[C_ANSI + A_FG(a) + (((a & A_BOLD) && (!p || p->brighten)) ? 8 : 0)];
 }
 
 static LONG pen_bg(UWORD a)
 {
-    return (a & A_DEFBG) ? pen_back : ansipen[A_BG(a)];
+    return (a & A_DEFBG) ? pen_back : penv[C_ANSI + A_BG(a)];
 }
 
 static void set_pens(UWORD a)
@@ -207,42 +241,55 @@ static void set_pens(UWORD a)
         fg = bg;
         bg = t;
     }
+    if (a & A_SEL) {
+        fg = penv[C_SELTEXT];
+        bg = penv[C_SEL];
+    }
     SetAPen(win->RPort, fg);
     SetBPen(win->RPort, bg);
     SetDrMd(win->RPort, JAM2);
 }
 
-/* the 16 ANSI colours: exact pens where the screen has free ones (RTG,
- * 8-bit Workbench), else the nearest - but never the background */
-static void obtain_pens(void)
-{
-    static const ULONG rgb[16] = {
-        0x000000, 0xcd3131, 0x0dbc79, 0xe5e510, 0x3b78ff, 0xbc3fbc, 0x11a8cd, 0xe5e5e5,
-        0x666666, 0xf14c4c, 0x23d18b, 0xf5f543, 0x5c9dff, 0xd670d6, 0x29b8db, 0xffffff};
-    struct TagItem tg[2];
-    int i;
-    tg[0].ti_Tag = OBP_Precision;
-    tg[0].ti_Data = PRECISION_IMAGE;
-    tg[1].ti_Tag = TAG_END;
-    for (i = 0; i < 16; i++) {
-        ULONG c = rgb[i];
-        LONG p = -1;
-        if (GfxBase->LibNode.lib_Version >= 39)
-            p = ObtainBestPenA(scr->ViewPort.ColorMap, ((c >> 16) & 255) * 0x01010101UL,
-                               ((c >> 8) & 255) * 0x01010101UL, (c & 255) * 0x01010101UL, tg);
-        if (p >= 0) pens_obtained |= 1 << i;
-        else p = i == 0 ? pen_back : (i == 7 || i >= 8) ? pen_text : pen_hi;
-        if (p == pen_back && i != 0) p = (i == 4 || i == 12) ? pen_hi : pen_text;
-        ansipen[i] = p;
-    }
-}
-
+/* the pens of a profile's colours: exact ones where the screen has free
+ * pens (RTG, 8-bit Workbench), else the nearest - but text never in the
+ * background's pen unless it is meant to be */
 static void release_pens(void)
 {
     int i;
-    for (i = 0; i < 16; i++)
-        if (pens_obtained & (1 << i)) ReleasePen(scr->ViewPort.ColorMap, ansipen[i]);
+    for (i = 0; i < NCOLORS; i++)
+        if (pens_obtained & (1L << i)) ReleasePen(scr->ViewPort.ColorMap, penv[i]);
     pens_obtained = 0;
+    curprof = NULL;
+}
+
+static void obtain_pens(Profile *p)
+{
+    struct TagItem tg[2];
+    LONG *pv = (LONG *)NEARP(penv);      /* through a4 in the pure build */
+    int i;
+    if (!p) p = prof_default();
+    if (!p) return;
+    release_pens();
+    curprof = p;
+    tg[0].ti_Tag = OBP_Precision;
+    tg[0].ti_Data = PRECISION_IMAGE;
+    tg[1].ti_Tag = TAG_END;
+    for (i = 0; i < NCOLORS; i++) {
+        ULONG c = p->rgb[i];
+        LONG pen = -1;
+        if (GfxBase->LibNode.lib_Version >= 39)
+            pen = ObtainBestPenA(scr->ViewPort.ColorMap, ((c >> 16) & 255) * 0x01010101UL,
+                                 ((c >> 8) & 255) * 0x01010101UL, (c & 255) * 0x01010101UL, tg);
+        if (pen >= 0) pens_obtained |= 1L << i;
+        else pen = i == C_BG ? 0 : 1;
+        pv[i] = pen;
+    }
+    /* on screens with few colours, text that lands on the background's
+     * pen would vanish: use the foreground's instead */
+    for (i = 0; i < NCOLORS; i++)
+        if (i != C_BG && i != C_SEL && i != C_CURSOR && i != C_ANSI && pv[i] == pv[C_BG] &&
+            p->rgb[i] != p->rgb[C_BG])
+            pv[i] = pv[C_FG] != pv[C_BG] ? pv[C_FG] : (pv[C_BG] == 1 ? 2 : 1);
 }
 
 /* Text() in the terminal's font.  TrueType fonts come through diskfont
@@ -254,13 +301,36 @@ static void txt(struct RastPort *r, const char *s, int n)
 }
 
 /* draw cells [x0, x1) of the line c/a at display row y */
+/* is cell x of line l (see Tab) selected? */
+static int in_sel(Tab *t, int l, int x)
+{
+    int al, ac, bl, bc;
+    if (!t || !t->sel_on) return 0;
+    if (t->sl0 < t->sl1 || (t->sl0 == t->sl1 && t->sc0 <= t->sc1)) {
+        al = t->sl0; ac = t->sc0; bl = t->sl1; bc = t->sc1;
+    } else {
+        al = t->sl1; ac = t->sc1; bl = t->sl0; bc = t->sc0;
+    }
+    if (l < al || l > bl) return 0;
+    if (l == al && x < ac) return 0;
+    if (l == bl && x > bc) return 0;
+    return 1;
+}
+
+static UWORD cell_attr(Tab *t, int l, const UWORD *at, int x)
+{
+    return (UWORD)(at[x] | (in_sel(t, l, x) ? A_SEL : 0));
+}
+
 static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
 {
     int x = x0;
+    Tab *t = active();
+    int l = t ? t->hcount - t->view + y : 0;      /* line number, for the selection */
     while (x < x1) {
-        UWORD a = at[x];
+        UWORD a = cell_attr(t, l, at, x);
         int s = x;
-        while (x < x1 && at[x] == a) x++;
+        while (x < x1 && cell_attr(t, l, at, x) == a) x++;
         set_pens(a);
         Move(win->RPort, s * cw, term_top() + y * chh + base);
         if ((a & A_BOLD) && boldfont && win->RPort->Font == ownfont) {
@@ -341,6 +411,23 @@ static void damage_flush(Tab *t)
     damage_clear();
 }
 
+/* line l (see Tab): scrollback or screen; its width, 0 if none */
+static int line_at(Tab *t, int l, UBYTE **c, UWORD **a)
+{
+    if (l < 0) return 0;
+    if (l < t->hcount) {
+        int idx = (t->hhead - t->hcount + l + t->hlines) % t->hlines;
+        *c = t->hch + idx * t->hw;
+        *a = t->hat + idx * t->hw;
+        return t->hw < cols ? t->hw : cols;
+    }
+    l -= t->hcount;
+    if (l >= rows) return 0;
+    *c = t->ch + l * cols;
+    *a = t->at + l * cols;
+    return cols;
+}
+
 /* the line shown at display row y: scrollback or screen; its width */
 static int disp_row(Tab *t, int y, UBYTE **c, UWORD **a)
 {
@@ -357,22 +444,39 @@ static int disp_row(Tab *t, int y, UBYTE **c, UWORD **a)
     return cols;
 }
 
-static void draw_cursor(Tab *t)
+/* the cursor: its cell drawn in the profile's cursor colours; hiding it
+ * draws the cell again as it is */
+static int cur_shown, cur_x, cur_y;
+
+static void cursor_show(Tab *t)
 {
     int x, y;
-    if (!t || t != active() || !t->cursor_on || !win || t->view) return;
+    if (!t || t != active() || !t->cursor_on || !win || t->view || cur_shown) return;
     x = t->cx < cols ? t->cx : cols - 1;
     y = t->cy;
-    SetDrMd(win->RPort, COMPLEMENT);
-    SetAPen(win->RPort, pen_hi);
-    RectFill(win->RPort, x * cw, term_top() + y * chh, x * cw + cw - 1, term_top() + y * chh + chh - 1);
+    SetAPen(win->RPort, penv[C_CURTEXT]);
+    SetBPen(win->RPort, penv[C_CURSOR]);
     SetDrMd(win->RPort, JAM2);
+    Move(win->RPort, x * cw, term_top() + y * chh + base);
+    txt(win->RPort, (const char *)&t->ch[y * cols + x], 1);
+    cur_shown = 1;
+    cur_x = x;
+    cur_y = y;
+}
+
+static void cursor_hide(Tab *t)
+{
+    if (!cur_shown) return;
+    cur_shown = 0;
+    if (!t || t != active() || !win || t->view || cur_y >= rows || cur_x >= cols) return;
+    draw_cells(cur_y, t->ch + cur_y * cols, t->at + cur_y * cols, cur_x, cur_x + 1);
 }
 
 static void redraw_tab(Tab *t)
 {
     int y;
     if (!t || !win) return;
+    cur_shown = 0;
     SetAPen(win->RPort, pen_back);
     RectFill(win->RPort, 0, term_top(), win->GZZWidth - 1, win->GZZHeight - 1);
     for (y = 0; y < rows; y++) {
@@ -381,7 +485,7 @@ static void redraw_tab(Tab *t)
         int w = disp_row(t, y, &c, &a);
         draw_cells(y, c, a, 0, w);
     }
-    draw_cursor(t);
+    cursor_show(t);
 }
 
 /* ------------------------------------------------------------------ */
@@ -394,9 +498,9 @@ static void hist_push(Tab *t, int y)
     UBYTE *c;
     UWORD *a;
     if (!t->hch) {
-        if (!sb_lines || t->hfail) return;
+        if (!t->sblines || t->hfail) return;
         t->hw = cols;
-        t->hlines = sb_lines;
+        t->hlines = t->sblines;
         t->hch = AllocVec(t->hlines * t->hw, MEMF_ANY);
         t->hat = AllocVec(t->hlines * t->hw * sizeof(UWORD), MEMF_ANY);
         if (!t->hch || !t->hat) {
@@ -433,6 +537,7 @@ static void scroll_view(Tab *t, int n)
     if (v > t->hcount) v = t->hcount;
     if (v < 0) v = 0;
     if (v == t->view) return;
+    if (!t->view && t == active()) cursor_hide(t);      /* it would scroll along */
     n = v - t->view;
     t->view = v;
     sb_dirty = 1;
@@ -448,7 +553,10 @@ static void scroll_view(Tab *t, int n)
             int w = disp_row(t, y, &c, &a);
             draw_cells(y, c, a, 0, w);
         }
-        if (!v) draw_cursor(t);
+        if (!v) {
+            cur_shown = 0;
+            cursor_show(t);
+        }
     } else
         redraw_tab(t);
 }
@@ -844,7 +952,12 @@ static void term_write(Tab *t, const UBYTE *s, long n)
     if (t != active()) {
         /* still keep the buffer up to date for inactive tabs */
     }
-    if (t == active()) draw_cursor(t);          /* hide (complement) */
+    if (t->sel_on && !selecting) {
+        /* output: the selection no longer means what it did */
+        t->sel_on = 0;
+        if (t == active()) redraw_lines(t, t->sl0, t->sl1);
+    }
+    if (t == active()) cursor_hide(t);
     damage_clear();
     batching = dmg != NULL;
     for (i = 0; i < n; i++) {
@@ -946,7 +1059,7 @@ static void term_write(Tab *t, const UBYTE *s, long n)
         }
     }
     damage_flush(t);
-    if (t == active()) draw_cursor(t);          /* show */
+    if (t == active()) cursor_show(t);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1069,7 +1182,7 @@ static void expire_waits(void)
 }
 
 static void tab_free(Tab *t);
-static void do_item(int item);
+static void do_cmd(int cmd);
 static void zoom(int dir);
 static void font_requester(void);
 
@@ -1155,6 +1268,14 @@ static void select_tab(int i)
 {
     if (i < 0 || i >= MAXTABS || !tabs[i].used || tabs[i].hidden) return;
     cur = i;
+    {
+        Profile *p = prof_by_id(tabs[i].prof);
+        if (!p) {
+            p = prof_default();
+            tabs[i].prof = p ? p->id : 0;
+        }
+        if (win && p != curprof) obtain_pens(p);
+    }
     draw_tabbar();
     redraw_tab(&tabs[i]);
     update_title();
@@ -1185,7 +1306,7 @@ static void step_tab(int dir)
 
 /* shell launch request, handled by a helper process */
 static struct {
-    BPTR in, out, path;
+    BPTR in, out, path, dir;
     struct MsgPort *port;
     Tab *tab;
     struct Task *parent;
@@ -1225,10 +1346,12 @@ static void launcher(void)
             NP_Input, launch.in, NP_Output, launch.out, NP_CloseInput, TRUE, NP_CloseOutput, TRUE,
             NP_Cli, TRUE, NP_CommandName, (ULONG)"bash", NP_Arguments, (ULONG)"-i --amiterm\n",
             NP_Path, launch.path, NP_Error, launch.out, NP_CloseError, FALSE,
+            launch.dir ? NP_CurrentDir : TAG_IGNORE, launch.dir,
             NP_ConsoleTask, (ULONG)launch.port, NP_StackSize, 65536, TAG_END);
         if (p) {
             r = 0;
             launch.path = 0;                /* the new process owns it */
+            launch.dir = 0;
         } else if (own)
             UnLoadSeg(seg);
     }
@@ -1281,6 +1404,8 @@ static void launch_done(void)
     dbg("launch = %ld", launch.result, 0, 0);
     free_path(launch.path);                 /* if not handed over */
     launch.path = 0;
+    if (launch.dir) UnLock(launch.dir);
+    launch.dir = 0;
     if (launch.result != -1) launched++;
     else if (t->used) {
         FreeDosObject(DOS_FILEHANDLE, BADDR(launch.in));
@@ -1290,7 +1415,24 @@ static void launch_done(void)
     launch.busy = 0;
 }
 
+/* the directory a profile starts its shells in (0: the terminal's) */
+static BPTR profile_dir(Profile *p)
+{
+    char b[200];
+    Tab *a = active();
+    b[0] = 0;
+    if (p->dirmode == DIR_FIXED) sprintf(b, "%.199s", p->dir);
+    else if (p->dirmode == DIR_PREVIOUS && a && !strncmp(a->title, "bash: ", 6)) sprintf(b, "%.199s", a->title + 6);
+    else if (p->dirmode == DIR_HOME && GetVar((STRPTR)"HOME", (STRPTR)NEARP(b), sizeof(b), 0) <= 0) b[0] = 0;
+    return b[0] ? Lock((STRPTR)NEARP(b), SHARED_LOCK) : 0;
+}
+
 static int new_tab(void)
+{
+    return new_tab_with(prof_default());
+}
+
+static int new_tab_with(Profile *prof)
 {
     int i;
     Tab *t = NULL;
@@ -1307,6 +1449,9 @@ static int new_tab(void)
         return -1;
     }
     memset(t, 0, sizeof(*t));
+    if (!prof) prof = prof_default();
+    t->prof = prof ? prof->id : 0;
+    t->sblines = prof && prof->scrollback > 0 ? prof->scrollback : sb_lines;
     t->port = CreateMsgPort();
     if (!t->port) return -1;
     t->used = 1;
@@ -1346,6 +1491,7 @@ static int new_tab(void)
     launch.out = MKBADDR(out);
     launch.port = t->port;
     launch.path = copy_path();
+    launch.dir = prof ? profile_dir(prof) : 0;
     launch.tab = t;
     launch.parent = FindTask(NULL);
     launch.busy = 1;
@@ -1358,6 +1504,8 @@ static int new_tab(void)
         launch.busy = 0;
         free_path(launch.path);
         launch.path = 0;
+        if (launch.dir) UnLock(launch.dir);
+        launch.dir = 0;
         FreeDosObject(DOS_FILEHANDLE, in);
         FreeDosObject(DOS_FILEHANDLE, out);
         t->opencount = 0;
@@ -1366,6 +1514,11 @@ static int new_tab(void)
     }
     t->started = 1;
     ntabs_open++;
+    if (prof && prof->cmd[0]) {
+        /* "send text at start": typed ahead for the new shell */
+        queue_input(t, prof->cmd, (int)strlen(prof->cmd));
+        queue_input(t, "\r", 1);
+    }
     select_tab(i);
     return i;
 }
@@ -1393,6 +1546,7 @@ static void tab_free(Tab *t)
     if (t->at) FreeVec(t->at);
     if (t->hch) FreeVec(t->hch);
     if (t->hat) FreeVec(t->hat);
+    if (t->paste) FreeVec(t->paste);
     memset(t, 0, sizeof(*t));
 }
 
@@ -1505,11 +1659,14 @@ static void key_event(struct IntuiMessage *im)
     if (q & IEQUALIFIER_LCOMMAND) {
         /* Left-Amiga works like Right-Amiga for the tab shortcuts (it is
          * where Command is on a Mac keyboard under an emulator) */
-        static const char keys[] = "tw\0[]\0+-0f\0\0q";
+        static const char keys[] = "tw[],qcva+-0f";
+        static const UBYTE kcmd[] = {CMD_NEWTAB, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
+                                     CMD_COPY, CMD_PASTE, CMD_SELALL, CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE,
+                                     CMD_FONT};
         n = MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL);
         if (n == 1 && buf[0]) {
-            const char *k = memchr(keys, buf[0] == '=' ? '+' : buf[0] | 0x20, sizeof(keys) - 1);
-            if (k) do_item((int)(k - keys));
+            const char *k = strchr(keys, buf[0] == '=' ? '+' : (buf[0] >= 'A' && buf[0] <= 'Z') ? buf[0] | 0x20 : buf[0]);
+            if (k) do_cmd(kcmd[k - keys]);
             else if (buf[0] >= '1' && buf[0] <= '9') {
                 int s = visible_index(buf[0] - '1');
                 if (s >= 0) select_tab(s);
@@ -1595,6 +1752,220 @@ static void layout(void)
         SetAPen(win->RPort, pen_back);
         RectFill(win->RPort, 0, tabh, win->GZZWidth - 1, win->GZZHeight - 1);
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* selection, copy and paste                                            */
+
+
+/* draw lines la..lb again where they are on show */
+static void redraw_lines(Tab *t, int la, int lb)
+{
+    int y, top;
+    if (!t || t != active() || !win) return;
+    if (la > lb) {
+        int k = la;
+        la = lb;
+        lb = k;
+    }
+    top = t->hcount - t->view;
+    for (y = 0; y < rows; y++) {
+        UBYTE *c;
+        UWORD *a;
+        int w;
+        if (top + y < la || top + y > lb) continue;
+        w = disp_row(t, y, &c, &a);
+        draw_cells(y, c, a, 0, w);
+        if (!t->view && y == cur_y) cur_shown = 0;
+    }
+    cursor_show(t);
+}
+
+static void sel_clear(Tab *t)
+{
+    if (!t || !t->sel_on) return;
+    t->sel_on = 0;
+    redraw_lines(t, t->sl0, t->sl1);
+}
+
+static int word_char(UBYTE c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c >= 0xC0 ||
+           strchr("-_.~/:+@%=#$", c) != NULL;
+}
+
+/* the selection's ends widened to whole words / lines */
+static void sel_widen(Tab *t)
+{
+    UBYTE *c;
+    UWORD *a;
+    int w, fwd = t->sl0 < t->sl1 || (t->sl0 == t->sl1 && t->sc0 <= t->sc1);
+    int *l0 = fwd ? &t->sc0 : &t->sc1, *l1 = fwd ? &t->sc1 : &t->sc0;
+    int la = fwd ? t->sl0 : t->sl1, lb = fwd ? t->sl1 : t->sl0;
+    if (sel_unit == 2) {
+        *l0 = 0;
+        *l1 = cols - 1;
+        return;
+    }
+    if (sel_unit != 1) return;
+    if ((w = line_at(t, la, &c, &a)) > 0 && *l0 < w && word_char(c[*l0]))
+        while (*l0 > 0 && word_char(c[*l0 - 1])) (*l0)--;
+    if ((w = line_at(t, lb, &c, &a)) > 0 && *l1 < w && word_char(c[*l1]))
+        while (*l1 + 1 < w && word_char(c[*l1 + 1])) (*l1)++;
+}
+
+/* the selected text, lines joined with newlines, trailing blanks of
+ * each line dropped */
+static void copy_selection(Tab *t)
+{
+    int al, ac, bl, bc, l, n = 0, cap;
+    char *buf;
+    if (!t || !t->sel_on) return;
+    if (t->sl0 < t->sl1 || (t->sl0 == t->sl1 && t->sc0 <= t->sc1)) {
+        al = t->sl0; ac = t->sc0; bl = t->sl1; bc = t->sc1;
+    } else {
+        al = t->sl1; ac = t->sc1; bl = t->sl0; bc = t->sc0;
+    }
+    cap = (bl - al + 1) * (cols + 1) + 1;
+    if (!(buf = AllocVec(cap, MEMF_ANY))) return;
+    for (l = al; l <= bl; l++) {
+        UBYTE *c;
+        UWORD *a;
+        int w = line_at(t, l, &c, &a), x0 = l == al ? ac : 0, x1 = l == bl ? bc + 1 : w, e;
+        if (x1 > w) x1 = w;
+        for (e = x1; e > x0 && (c[e - 1] == ' ' || c[e - 1] == 0); e--) ;
+        if (e > x0) {
+            memcpy(buf + n, c + x0, e - x0);
+            n += e - x0;
+        }
+        if (l < bl) buf[n++] = '\n';
+    }
+    os_clip_write(buf, n);
+    FreeVec(buf);
+}
+
+static void select_all(Tab *t)
+{
+    if (!t) return;
+    t->sel_on = 1;
+    t->sl0 = 0;
+    t->sc0 = 0;
+    t->sl1 = t->hcount + rows - 1;
+    t->sc1 = cols - 1;
+    redraw_lines(t, 0, t->sl1);
+}
+
+/* give pasted text to the shell as fast as its input queue takes it */
+static void feed_paste(Tab *t)
+{
+    while (t->paste && t->ppos < t->plen) {
+        int room = INQ - 1 - q_avail(t), n = 0;
+        char buf[64];
+        if (t->raw && room <= 0) return;
+        while (n < (int)sizeof(buf) && t->ppos < t->plen && (!t->raw || n < room)) {
+            char c = t->paste[t->ppos++];
+            buf[n++] = c == '\n' ? '\r' : c;
+            if (!t->raw && c == '\n') break;          /* cooked: line by line */
+        }
+        if (t->raw) queue_input(t, buf, n);
+        else cooked_key(t, buf, n);
+    }
+    if (t->paste) {
+        FreeVec(t->paste);
+        t->paste = NULL;
+    }
+}
+
+static void paste_clip(Tab *t)
+{
+    long n;
+    char *s;
+    if (!t || t->paste) return;
+    if (t->view) scroll_view(t, -t->view);
+    if (!(s = os_clip_read(&n))) {
+        DisplayBeep(scr);
+        return;
+    }
+    if ((t->paste = AllocVec(n + 1, MEMF_ANY)) != NULL) {
+        long i, k = 0;
+        for (i = 0; i < n; i++)
+            if (s[i] && s[i] != '\r') t->paste[k++] = s[i];     /* \r\n -> \n */
+        t->plen = k;
+        t->ppos = 0;
+    }
+    os_clip_free(s);
+    feed_paste(t);
+}
+
+static void mouse_cell(int mx, int my, int *l, int *c)
+{
+    Tab *t = active();
+    int y = (my - term_top()) / chh, x = mx / cw;
+    if (my < term_top()) y = -1;
+    if (y >= rows) y = rows - 1;
+    if (x < 0) x = 0;
+    if (x >= cols) x = cols - 1;
+    if (y < 0) y = 0;
+    *l = t->hcount - t->view + y;
+    *c = x;
+}
+
+static void sel_press(int mx, int my, UWORD qual, ULONG secs, ULONG mics)
+{
+    Tab *t = active();
+    int l, c, ol0 = t ? t->sl0 : 0, ol1 = t ? t->sl1 : 0, was = t ? t->sel_on : 0;
+    if (!t) return;
+    mouse_cell(mx, my, &l, &c);
+    if ((qual & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) && t->sel_on) {
+        t->sl1 = l;                    /* Shift-click: extend */
+        t->sc1 = c;
+    } else {
+        if (l == last_l && c == last_c && DoubleClick(last_secs, last_mics, secs, mics)) clicks = clicks % 3 + 1;
+        else clicks = 1;
+        sel_unit = clicks - 1;
+        t->sl0 = t->sl1 = l;
+        t->sc0 = t->sc1 = c;
+        t->sel_on = sel_unit > 0;
+        sel_widen(t);
+    }
+    last_l = l;
+    last_c = c;
+    last_secs = secs;
+    last_mics = mics;
+    selecting = 1;
+    ReportMouse(TRUE, win);
+    if (was) redraw_lines(t, ol0, ol1);
+    redraw_lines(t, t->sl0, t->sl1);
+}
+
+static void sel_move(int mx, int my)
+{
+    Tab *t = active();
+    int l, c, old = t ? t->sl1 : 0;
+    if (!t || !selecting) return;
+    /* dragging above or below the text scrolls */
+    if (my < term_top()) scroll_view(t, 1);
+    else if (my >= term_top() + rows * chh && t->view) scroll_view(t, -1);
+    mouse_cell(mx, my, &l, &c);
+    if (l == t->sl1 && c == t->sc1 && t->sel_on) return;
+    t->sl1 = l;
+    t->sc1 = c;
+    t->sel_on = 1;
+    if (sel_unit) {
+        /* widening moves the anchor's end too: start again from it */
+        sel_widen(t);
+    }
+    redraw_lines(t, old < l ? old : l, old < l ? l : old);
+    redraw_lines(t, t->sl0, t->sl0);
+}
+
+static void sel_release(void)
+{
+    Tab *t = active();
+    if (!selecting) return;
+    selecting = 0;
+    ReportMouse(FALSE, win);
+    if (t && t->sel_on && curprof && curprof->copysel) copy_selection(t);
 }
 
 static void click(int x, int y)
@@ -1860,17 +2231,28 @@ static int find_ttf(void)
  * screens, $AMIBASH_FONT on palette screens, "name/size"), else on an
  * RTG screen an installed TrueType monospaced font, else AmiBashMono
  * (its tall-pixel cut on non-interlaced screens), else the system font. */
+static int font_resize;           /* choose_font(): fit the window to it */
+
 static void choose_font(void)
 {
     const char *fam = tall_pixels() ? "AmiBashMonoNL" : "AmiBashMono";
     char v[220], *sl;
     UWORD size;
+    if (curprof && curprof->font[0] && (sl = strrchr(curprof->font, '/')) != NULL) {
+        /* the profile's font */
+        sprintf(v, "%.*s", (int)(sl - curprof->font), curprof->font);
+        if (find_font(v)) {
+            size = (UWORD)atoi(sl + 1);
+            font_default = size;
+            if (set_font(size, 0, font_resize)) return;
+        }
+    }
     if (GetVar((STRPTR)font_var(), (STRPTR)NEARP(v), sizeof(v), 0) > 0 && (sl = strrchr(v, '/')) != NULL) {
         *sl = 0;
         if (find_font(v)) {
             size = (UWORD)atoi(sl + 1);
             font_default = scalable ? pick_default() : size;
-            if (set_font(size, 0, 0)) return;
+            if (set_font(size, 0, font_resize)) return;
         }
     }
     dbg("font: rtg %ld depth %ld", rtg_screen(), (LONG)GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH), 0);
@@ -1878,7 +2260,7 @@ static void choose_font(void)
         long t0 = now_ticks();
         dbg("font: TrueType %s", (LONG)font_path, 0, 0);
         font_default = pick_default();
-        if (set_font(font_default, 0, 0)) {
+        if (set_font(font_default, 0, font_resize)) {
             dbg("font: opened at %ld in %ld ticks", font_default, now_ticks() - t0, 0);
             return;
         }
@@ -1890,7 +2272,7 @@ static void choose_font(void)
         return;                                    /* keep the system font */
     }
     font_default = pick_default();
-    set_font(font_default, 0, 0);
+    set_font(font_default, 0, font_resize);
 }
 
 /* Amiga-+ / Amiga-- / Amiga-0: TrueType fonts by a pixel or two, bitmap
@@ -1958,36 +2340,84 @@ static void font_requester(void)
     FreeAslRequest(fr);
 }
 
-static struct NewMenu nm[] = {
-    {NM_TITLE, (STRPTR)"Terminal", 0, 0, 0, 0},
-    {NM_ITEM, (STRPTR)"New Tab", (STRPTR)"T", 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Close Tab", (STRPTR)"W", 0, 0, 0},
-    {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Previous Tab", (STRPTR)"[", 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Next Tab", (STRPTR)"]", 0, 0, 0},
-    {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Bigger Text", (STRPTR)"+", 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Smaller Text", (STRPTR)"-", 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Default Size", (STRPTR)"0", 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Font...", (STRPTR)"F", 0, 0, 0},
-    {NM_ITEM, NM_BARLABEL, 0, 0, 0, 0},
-    {NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, 0},
-    {NM_END, 0, 0, 0, 0, 0}
-};
 
-/* menu item number -> action */
-static void do_item(int item)
+static struct NewMenu *nmenu;
+
+#define NMI(type, label, key, cmd) \
+    (m->nm_Type = (type), m->nm_Label = (STRPTR)(label), m->nm_CommKey = (STRPTR)(key), m->nm_Flags = 0, \
+     m->nm_MutualExclude = 0, m->nm_UserData = (APTR)(cmd), m++)
+
+/* the menu strip, with the profiles in "New Tab with Profile" */
+static void build_menus(void)
 {
-    switch (item) {
-    case 0: new_tab(); break;
-    case 1: if (cur >= 0) close_tab(cur); break;
-    case 3: step_tab(-1); break;
-    case 4: step_tab(1); break;
-    case 6: zoom(1); break;
-    case 7: zoom(-1); break;
-    case 8: zoom(0); break;
-    case 9: font_requester(); break;
-    case 11: quitting = 1; break;
+    struct NewMenu *m;
+    Profile *p;
+    int n = 0;
+    if (!win) return;
+    if (menus) {
+        ClearMenuStrip(win);
+        FreeMenus(menus);
+        menus = NULL;
+    }
+    if (nmenu) FreeVec(nmenu);
+    if (!(nmenu = AllocVec((32 + MAXPROFMENU) * sizeof(struct NewMenu), MEMF_CLEAR))) return;
+    m = nmenu;
+    NMI(NM_TITLE, "Terminal", 0, 0);
+    NMI(NM_ITEM, "New Tab", "T", CMD_NEWTAB);
+    NMI(NM_ITEM, "New Tab with Profile", 0, 0);
+    for (p = profiles; p && n < MAXPROFMENU; p = p->next, n++) NMI(NM_SUB, p->name, 0, CMD_PROFILE + n);
+    NMI(NM_ITEM, "Close Tab", "W", CMD_CLOSETAB);
+    NMI(NM_ITEM, NM_BARLABEL, 0, 0);
+    NMI(NM_ITEM, "Previous Tab", "[", CMD_PREVTAB);
+    NMI(NM_ITEM, "Next Tab", "]", CMD_NEXTTAB);
+    NMI(NM_ITEM, NM_BARLABEL, 0, 0);
+    NMI(NM_ITEM, "Preferences...", ",", CMD_PREFS);
+    NMI(NM_ITEM, NM_BARLABEL, 0, 0);
+    NMI(NM_ITEM, "Quit", "Q", CMD_QUIT);
+    NMI(NM_TITLE, "Edit", 0, 0);
+    NMI(NM_ITEM, "Copy", "C", CMD_COPY);
+    NMI(NM_ITEM, "Paste", "V", CMD_PASTE);
+    NMI(NM_ITEM, NM_BARLABEL, 0, 0);
+    NMI(NM_ITEM, "Select All", "A", CMD_SELALL);
+    NMI(NM_TITLE, "View", 0, 0);
+    NMI(NM_ITEM, "Bigger Text", "+", CMD_BIGGER);
+    NMI(NM_ITEM, "Smaller Text", "-", CMD_SMALLER);
+    NMI(NM_ITEM, "Default Size", "0", CMD_DEFSIZE);
+    NMI(NM_ITEM, "Font...", "F", CMD_FONT);
+    m->nm_Type = NM_END;
+    menus = CreateMenusA(nmenu, NULL);
+    if (menus && LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_END)) SetMenuStrip(win, menus);
+}
+
+static void prefs_apply(Profile *p);
+static void prefs_changed(void);
+
+static void do_cmd(int cmd)
+{
+    Tab *t = active();
+    switch (cmd) {
+    case CMD_NEWTAB: new_tab(); break;
+    case CMD_CLOSETAB: if (cur >= 0) close_tab(cur); break;
+    case CMD_PREVTAB: step_tab(-1); break;
+    case CMD_NEXTTAB: step_tab(1); break;
+    case CMD_PREFS:
+        if (win && prefs_open(win->WScreen, curprof, prefs_apply, prefs_changed)) DisplayBeep(scr);
+        break;
+    case CMD_QUIT: quitting = 1; break;
+    case CMD_COPY: if (t && t->sel_on) copy_selection(t); break;
+    case CMD_PASTE: paste_clip(t); break;
+    case CMD_SELALL: select_all(t); break;
+    case CMD_BIGGER: zoom(1); break;
+    case CMD_SMALLER: zoom(-1); break;
+    case CMD_DEFSIZE: zoom(0); break;
+    case CMD_FONT: font_requester(); break;
+    default:
+        if (cmd >= CMD_PROFILE) {
+            Profile *p = profiles;
+            int n = cmd - CMD_PROFILE;
+            while (p && n--) p = p->next;
+            if (p) new_tab_with(p);
+        }
     }
 }
 
@@ -1995,10 +2425,45 @@ static void menu_pick(UWORD code)
 {
     while (code != MENUNULL) {
         struct MenuItem *it = ItemAddress(menus, code);
-        do_item(ITEMNUM(code));
         if (!it) break;
+        do_cmd((int)(ULONG)GTMENUITEM_USERDATA(it));
         code = it->NextSelect;
     }
+}
+
+/* from the preferences window: a profile changed (colours show at once;
+ * the active tab's profile's font too) */
+static char applied_font[64];
+
+static void prefs_apply(Profile *p)
+{
+    int i;
+    Tab *t;
+    Profile *ap;
+    (void)p;
+    for (i = 0; i < MAXTABS; i++)
+        if (tabs[i].used && !prof_by_id(tabs[i].prof)) tabs[i].prof = prof_default()->id;
+    if (!win) return;
+    t = active();
+    ap = t ? prof_by_id(t->prof) : prof_default();
+    obtain_pens(ap);
+    if (ap && strcmp(ap->font, applied_font)) {
+        strcpy(applied_font, ap->font);
+        font_resize = 1;
+        choose_font();
+        font_resize = 0;
+    }
+    draw_tabbar();
+    if (t) redraw_tab(t);
+}
+
+/* the list of profiles changed: the menu, and tabs of deleted ones */
+static void prefs_changed(void)
+{
+    int i;
+    for (i = 0; i < MAXTABS; i++)
+        if (tabs[i].used && !prof_by_id(tabs[i].prof)) tabs[i].prof = prof_default()->id;
+    build_menus();
 }
 
 /* message from a shell: "new" / "next" / "prev" */
@@ -2101,6 +2566,7 @@ int term_main(const char *selfpath)
     }
     tabs = AllocVec(MAXTABS * sizeof(Tab), MEMF_ANY | MEMF_CLEAR);
     if (!tabs) return term_fail("out of memory");
+    prof_load();
     scr = LockPubScreen(NULL);
     if (!scr) return term_fail("cannot lock the screen");
     dri = GetScreenDrawInfo(scr);
@@ -2138,7 +2604,7 @@ int term_main(const char *selfpath)
                          WA_PubScreen, (ULONG)scr,
                          WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MOUSEBUTTONS |
                                        IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW | IDCMP_GADGETDOWN |
-                                       IDCMP_GADGETUP | IDCMP_IDCMPUPDATE,
+                                       IDCMP_GADGETUP | IDCMP_IDCMPUPDATE | IDCMP_MOUSEMOVE,
                          TAG_END);
     UnlockPubScreen(NULL, scr);
     if (!win) {
@@ -2146,10 +2612,10 @@ int term_main(const char *selfpath)
         return term_fail("cannot open the window (out of memory?)");
     }
     SetFont(win->RPort, font);
-    obtain_pens();
+    obtain_pens(prof_default());
+    if (curprof) strcpy(applied_font, curprof->font);
     choose_font();
-    menus = CreateMenus(nm, TAG_END);
-    if (menus && LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_END)) SetMenuStrip(win, menus);
+    build_menus();
     pubport = CreateMsgPort();
     if (pubport) {
         pubport->mp_Node.ln_Name = (char *)"AmiBash.Terminal";
@@ -2211,6 +2677,7 @@ int term_main(const char *selfpath)
         if (visible == 0 && win) {
             /* last tab gone: the window goes away; keep serving until
              * every shell has closed its handles */
+            prefs_close();
             ClearMenuStrip(win);
             release_pens();
             CloseWindow(win);
@@ -2220,15 +2687,17 @@ int term_main(const char *selfpath)
         wsig = win ? 1UL << win->UserPort->mp_SigBit : 0;
         tsig = timerport ? 1UL << timerport->mp_SigBit : 0;
         psig = pubport ? 1UL << pubport->mp_SigBit : 0;
-        all = wsig | tsig | psig | SIGBREAKF_CTRL_F;
+        all = wsig | tsig | psig | prefs_signal() | SIGBREAKF_CTRL_F;
         for (i = 0; i < MAXTABS; i++)
             if (tabs[i].used) all |= 1UL << tabs[i].port->mp_SigBit;
         if (Wait(all) & SIGBREAKF_CTRL_F) launch_done();
+        if (prefs_is_open()) prefs_handle();
         for (i = 0; i < MAXTABS; i++) {
             struct Message *m;
             if (!tabs[i].used) continue;
             while (tabs[i].used && (m = GetMsg(tabs[i].port)) != NULL)
                 handle_packet(&tabs[i], (struct DosPacket *)m->mn_Node.ln_Name);
+            if (tabs[i].used && tabs[i].paste) feed_paste(&tabs[i]);
         }
         if (timerport && GetMsg(timerport)) {
             timer_busy = 0;
@@ -2249,6 +2718,8 @@ int term_main(const char *selfpath)
                 ULONG cl = im->Class;
                 UWORD code = im->Code;
                 int mx = im->MouseX, my = im->MouseY;
+                UWORD qual = im->Qualifier;
+                ULONG secs = im->Seconds, mics = im->Micros;
                 if (cl == IDCMP_RAWKEY) {
                     key_event(im);
                     ReplyMsg(&im->ExecMessage);
@@ -2273,7 +2744,16 @@ int term_main(const char *selfpath)
                 case IDCMP_NEWSIZE: layout(); break;
                 case IDCMP_MENUPICK: menu_pick(code); break;
                 case IDCMP_MOUSEBUTTONS:
-                    if (code == SELECTDOWN) click(mx - win->BorderLeft, my - win->BorderTop);
+                    if (code == SELECTDOWN) {
+                        if (my - win->BorderTop >= tabh)
+                            sel_press(mx - win->BorderLeft, my - win->BorderTop, qual, secs, mics);
+                        else
+                            click(mx - win->BorderLeft, my - win->BorderTop);
+                    } else if (code == SELECTUP)
+                        sel_release();
+                    break;
+                case IDCMP_MOUSEMOVE:
+                    sel_move(mx - win->BorderLeft, my - win->BorderTop);
                     break;
                 }
             }
@@ -2297,7 +2777,11 @@ int term_main(const char *selfpath)
         DeleteIORequest((struct IORequest *)treq);
     }
     if (timerport) DeleteMsgPort(timerport);
+    prefs_close();
     if (menus) FreeMenus(menus);
+    menus = NULL;
+    if (nmenu) FreeVec(nmenu);
+    nmenu = NULL;
     if (vi) FreeVisualInfo(vi);
     free_scroller();
     if (boldfont) CloseFont(boldfont);
@@ -2309,6 +2793,7 @@ int term_main(const char *selfpath)
     tabs = NULL;
     FreeVec(dmg);
     dmg = NULL;
+    prof_free_all();
     /* the last shells have closed their handles, so they are past our
      * code; give them a moment to finish exiting before it is unloaded */
     Delay(10);

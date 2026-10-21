@@ -22,3 +22,4 @@ video_sync = 0
 uae_cpu_speed = max
 joystick_port_0 = mouse
 joystick_port_1 = none
+mouse_speed = 300

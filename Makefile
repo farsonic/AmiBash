@@ -10,7 +10,7 @@ SRCS = util.c io.c path.c parse.c pattern.c expand.c arith.c vars.c exec.c \
        test.c builtins.c lineedit.c main.c selftest.c regex.c timeutil.c \
        utils_fs.c utils_text.c utils_misc.c
 HOSTSRCS = $(SRCS) os_posix.c
-AMIGASRCS = $(SRCS) os_amiga.c term_amiga.c
+AMIGASRCS = $(SRCS) os_amiga.c term_amiga.c term_prefs.c
 
 VBCC ?= /home/user/toolchain/vbcc
 NDK ?= /home/user/toolchain/ndk

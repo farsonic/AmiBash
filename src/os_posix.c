@@ -621,3 +621,52 @@ unsigned long os_random_seed(void)
     return (unsigned long)(tv.tv_usec ^ (tv.tv_sec << 8) ^ getpid());
 }
 #endif
+
+/* clipboard: a file ($AMIBASH_CLIPFILE or /tmp/amibash-clipboard) */
+static const char *clip_path(void)
+{
+    const char *p = getenv("AMIBASH_CLIPFILE");
+    return p && *p ? p : "/tmp/amibash-clipboard";
+}
+
+int os_clip_write(const char *s, long n)
+{
+    FILE *f = fopen(clip_path(), "wb");
+    int ok;
+    if (!f) return -1;
+    ok = fwrite(s, 1, (size_t)n, f) == (size_t)n;
+    return fclose(f) == 0 && ok ? 0 : -1;
+}
+
+char *os_clip_read(long *n)
+{
+    FILE *f = fopen(clip_path(), "rb");
+    char *b = NULL;
+    long len = 0, cap = 0;
+    size_t r;
+    *n = 0;
+    if (!f) return NULL;
+    for (;;) {
+        if (len + 4096 + 1 > cap) {
+            char *nb = realloc(b, cap = cap * 2 + 8192);
+            if (!nb) break;
+            b = nb;
+        }
+        r = fread(b + len, 1, 4096, f);
+        if (!r) break;
+        len += (long)r;
+    }
+    fclose(f);
+    if (!b || !len) {
+        free(b);
+        return NULL;
+    }
+    b[len] = 0;
+    *n = len;
+    return b;
+}
+
+void os_clip_free(char *p)
+{
+    free(p);
+}

@@ -1566,3 +1566,115 @@ void os_sysinfo(OsSysInfo *si)
     strcpy(si->platform, "Amiga");
 }
 #endif
+
+/* ------------------------------------------------------------------ */
+/* clipboard: clipboard.device unit 0, text as IFF FORM FTXT / CHRS     */
+
+#include <devices/clipboard.h>
+
+static struct IOClipReq *clip_open(struct MsgPort **mp)
+{
+    struct IOClipReq *io;
+    if (!(*mp = CreateMsgPort())) return NULL;
+    io = (struct IOClipReq *)CreateIORequest(*mp, sizeof(struct IOClipReq));
+    if (io && OpenDevice((STRPTR)"clipboard.device", PRIMARY_CLIP, (struct IORequest *)io, 0) == 0) return io;
+    if (io) DeleteIORequest((struct IORequest *)io);
+    DeleteMsgPort(*mp);
+    return NULL;
+}
+
+static void clip_close(struct IOClipReq *io, struct MsgPort *mp)
+{
+    CloseDevice((struct IORequest *)io);
+    DeleteIORequest((struct IORequest *)io);
+    DeleteMsgPort(mp);
+}
+
+int os_clip_write(const char *s, long n)
+{
+    struct MsgPort *mp;
+    struct IOClipReq *io = clip_open(&mp);
+    ULONG pad = n & 1, total = 12 + 8 + n + pad;
+    UBYTE *buf;
+    int rc = -1;
+    if (!io) return -1;
+    buf = AllocVec(total, MEMF_ANY);
+    if (buf) {
+        ULONG *l = (ULONG *)buf;
+        l[0] = 0x464F524DUL;                    /* FORM */
+        l[1] = total - 8;
+        l[2] = 0x46545854UL;                    /* FTXT */
+        l[3] = 0x43485253UL;                    /* CHRS */
+        l[4] = (ULONG)n;
+        memcpy(buf + 20, s, n);
+        if (pad) buf[20 + n] = 0;
+        io->io_Command = CMD_WRITE;
+        io->io_Data = (STRPTR)buf;
+        io->io_Length = total;
+        io->io_Offset = 0;
+        io->io_ClipID = 0;
+        if (DoIO((struct IORequest *)io) == 0) {
+            io->io_Command = CMD_UPDATE;
+            rc = DoIO((struct IORequest *)io) == 0 ? 0 : -1;
+        }
+        FreeVec(buf);
+    }
+    clip_close(io, mp);
+    return rc;
+}
+
+/* read LEN bytes of the clip at the current offset; bytes read */
+static ULONG clip_get(struct IOClipReq *io, void *buf, ULONG len)
+{
+    io->io_Command = CMD_READ;
+    io->io_Data = (STRPTR)buf;
+    io->io_Length = len;
+    DoIO((struct IORequest *)io);
+    return io->io_Actual;
+}
+
+char *os_clip_read(long *n)
+{
+    struct MsgPort *mp;
+    struct IOClipReq *io = clip_open(&mp);
+    ULONG hdr[3], size, pos, len = 0;
+    UBYTE *form = NULL, dummy[64];
+    char *out = NULL;
+    *n = 0;
+    if (!io) return NULL;
+    io->io_Offset = 0;
+    io->io_ClipID = 0;
+    if (clip_get(io, hdr, 12) == 12 && hdr[0] == 0x464F524DUL && hdr[2] == 0x46545854UL && hdr[1] >= 4 &&
+        hdr[1] < 0x1000000UL) {
+        size = hdr[1] - 4;
+        form = AllocVec(size + 1, MEMF_ANY);
+        if (form && clip_get(io, form, size) == size) {
+            out = AllocVec(size + 1, MEMF_ANY);
+            for (pos = 0; out && pos + 8 <= size;) {
+                ULONG id = ((ULONG *)(form + pos))[0], cl = ((ULONG *)(form + pos))[1];
+                if (cl > size - pos - 8) break;
+                if (id == 0x43485253UL) {           /* CHRS */
+                    memcpy(out + len, form + pos + 8, cl);
+                    len += cl;
+                }
+                pos += 8 + cl + (cl & 1);
+            }
+        }
+    }
+    /* read to the end, which tells the device we are done */
+    while (clip_get(io, dummy, sizeof(dummy)) > 0) ;
+    if (form) FreeVec(form);
+    clip_close(io, mp);
+    if (out && !len) {
+        FreeVec(out);
+        out = NULL;
+    }
+    if (out) out[len] = 0;
+    *n = (long)len;
+    return out;
+}
+
+void os_clip_free(char *p)
+{
+    if (p) FreeVec(p);
+}

@@ -146,6 +146,12 @@ typedef struct OsSysInfo {
 } OsSysInfo;
 void  os_sysinfo(OsSysInfo *si);
 
+/* the clipboard (Amiga: clipboard.device unit 0, IFF FTXT) */
+int   os_clip_write(const char *s, long n);  /* 0 ok                         */
+char *os_clip_read(long *n);                 /* NULL if empty or not text;
+                                                free with os_clip_free()    */
+void  os_clip_free(char *p);
+
 void  os_init(void);
 void  os_cleanup(void);
 void  os_exit(int status);         /* end the program (after os_cleanup) */

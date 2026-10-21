@@ -1281,6 +1281,70 @@ int util_whoami(int argc, char **argv)
     return 0;
 }
 
+/* acopy [FILE]...: standard input (or the files) to the clipboard,
+ * like pbcopy on a Mac */
+int util_acopy(int argc, char **argv)
+{
+    UGetopt g;
+    int c, i, rc = 0;
+    char *buf = NULL;
+    long len = 0, cap = 0, n;
+    ug_init(&g, argc, argv, "", NULL);
+    while ((c = ug_next(&g)) != -1) {
+        if (c == UG_LONG + 999) {
+            ug_free(&g);
+            return u_help(argv[0]);
+        }
+        ug_free(&g);
+        return 2;
+    }
+    u_break_reset();
+    for (i = 0; i < (g.nops ? g.nops : 1) && !u_break(); i++) {
+        ShFile *in = u_open_in(argv[0], g.nops ? g.ops[i] : "-");
+        if (!in) {
+            rc = 1;
+            continue;
+        }
+        for (;;) {
+            if (len + 4096 > cap) buf = xrealloc(buf, cap = cap * 2 + 4096);
+            if ((n = shf_read(in, buf + len, 4096)) <= 0) break;
+            len += n;
+        }
+        u_close_in(in);
+    }
+    ug_free(&g);
+    if (os_clip_write(buf ? buf : "", len) != 0) {
+        sh_cmd_error(argv[0], "cannot write to the clipboard");
+        rc = 1;
+    }
+    xfree(buf);
+    return rc;
+}
+
+/* apaste: the clipboard's text to standard output, like pbpaste */
+int util_apaste(int argc, char **argv)
+{
+    UGetopt g;
+    int c;
+    long n;
+    char *s;
+    ug_init(&g, argc, argv, "", NULL);
+    while ((c = ug_next(&g)) != -1) {
+        if (c == UG_LONG + 999) {
+            ug_free(&g);
+            return u_help(argv[0]);
+        }
+        ug_free(&g);
+        return 2;
+    }
+    ug_free(&g);
+    s = os_clip_read(&n);
+    if (!s) return 1;                    /* empty, or not text */
+    sh_write(1, s, n);
+    os_clip_free(s);
+    return 0;
+}
+
 int util_hostname(int argc, char **argv)
 {
     (void)argc;
@@ -1298,6 +1362,8 @@ int util_hostname(int argc, char **argv)
 /* ================================================================== */
 
 const Builtin util_builtins[] = {
+    { "acopy", util_acopy, BI_UTIL, "acopy [FILE]...  (copy standard input or files to the clipboard)" },
+    { "apaste", util_apaste, BI_UTIL, "apaste  (write the clipboard's text to standard output)" },
     { "basename", util_basename, BI_UTIL, "basename NAME [SUFFIX] | basename -a [-s SUFFIX] [-z] NAME..." },
     { "cat", util_cat, BI_UTIL, "cat [-AbeEnstTv] [FILE]..." },
     { "chmod", util_chmod, BI_UTIL, "chmod [-Rv] (+-=)[hsparwed] | [ugoa][+-=][rwx] | OCTAL FILE..." },

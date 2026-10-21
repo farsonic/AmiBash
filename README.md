@@ -116,7 +116,9 @@ scripts see them (`$name` in AmigaDOS, `GetVar()`).
 * **Utilities built in** (so a bare Amiga gets the usual Unix tools): `ls cat
   cp mv rm mkdir rmdir touch chmod find du df stat realpath head tail wc grep
   egrep fgrep sort uniq cut tr sed tee seq rev nl paste tac basename dirname
-  sleep date env printenv clear xargs uname whoami hostname`. They work on
+  sleep date env printenv clear xargs uname whoami hostname`, and `acopy` /
+  `apaste`, the Amiga clipboard from the shell like `pbcopy` / `pbpaste` on a
+  Mac (`ls | acopy`, `apaste > notes.txt`). They work on
   Amiga paths: `ls -l` shows the Amiga protection bits (`hsparwed`) and file
   comments, and `chmod +s script` / `chmod -d file` set Amiga bits. To use an
   external command of the same name instead, run `enable -n NAME` or call it
@@ -155,9 +157,28 @@ use the new `bash.info`, or put that tool type in brackets.
 | **Amiga-+** / **Amiga--** / **Amiga-0** | bigger / smaller text, default size |
 | **Amiga-F** | choose the font (ASL requester, fixed-width fonts) |
 | scroller, mouse wheel, **Shift-Up** / **Shift-Down** | scroll back through earlier output (a page at a time with Shift); typing returns to the bottom |
+| drag, double-click, triple-click, Shift-click | select text (characters, a word, a line; extend), also into the scrollback |
+| **Amiga-C** / **Amiga-V** / **Amiga-A** | copy the selection, paste, select all (the Amiga clipboard) |
+| **Amiga-,** | Preferences: profiles, colours, font, start directory |
 
-The shortcuts work with either Amiga key and are also in the *Terminal*
-menu. **Fonts.** The terminal uses *AmiBashMono*, supplied in `Fonts/`: DejaVu
+The shortcuts work with either Amiga key and are also in the *Terminal*,
+*Edit* and *View* menus.
+
+**Selection and the clipboard.** Selected text is copied to the clipboard
+right away (switch that off per profile) or with Amiga-C; Amiga-V types the
+clipboard into the shell. New output clears the selection.
+
+**Preferences and profiles.** *Terminal > Preferences...* (Amiga-,) edits
+profiles, named sets of settings like in iTerm: the colours (foreground,
+background, bold, cursor, cursor text, selection, selected text and the 16
+ANSI colours, with presets such as Solarized Dark/Light, iTerm2, Workbench
+and Green screen), "brighten bold text", the font (or automatic), the
+directory new tabs start in (home, the previous tab's, or a fixed one),
+text sent to the shell at start, scrollback lines and copy-on-select.
+Changes show at once; *Use* keeps them for this session, *Save* in
+`ENVARC:AmiBash/terminal.prefs`, *Cancel* puts everything back. The
+profile marked `*` is the default; *Terminal > New Tab with Profile*
+opens a tab with any other, and each tab keeps its own colours. **Fonts.** The terminal uses *AmiBashMono*, supplied in `Fonts/`: DejaVu
 Sans Mono drawn separately for every size from 10 to 43 pixels, using the
 font's hinting, so text is sharp at every step instead of being a scaled
 bitmap. On screens with tall pixels (non-interlaced PAL/NTSC hires) it

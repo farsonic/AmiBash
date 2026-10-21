@@ -66,6 +66,6 @@ UDECL(uniq); UDECL(cut); UDECL(tr); UDECL(sed); UDECL(tee); UDECL(seq);
 UDECL(rev); UDECL(nl); UDECL(paste); UDECL(tac);
 UDECL(basename); UDECL(dirname); UDECL(sleep); UDECL(date); UDECL(env);
 UDECL(printenv); UDECL(clear); UDECL(xargs); UDECL(uname); UDECL(whoami);
-UDECL(hostname);
+UDECL(hostname); UDECL(acopy); UDECL(apaste);
 
 #endif
