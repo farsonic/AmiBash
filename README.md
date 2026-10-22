@@ -251,8 +251,8 @@ memory, like Unix `top`. Each line is a task with its share of the CPU,
 CPU time, priority, state, stack use and CLI command. `q` quits; `c` `p` `n` `t`
 sort by CPU, priority, name and time; `-d 0.5` updates every half second;
 `top -b -n 1` prints one report. Exec doesn't count CPU time per task, so `top`
-times each task's slices with exec's task-switch hooks and the E-clock; see
-`contrib/top/README.md`. For a graphical monitor with history graphs, see
+samples the running task 50 or 60 times a second from a vertical blank
+interrupt; see `contrib/top/README.md`. For a graphical monitor with history graphs, see
 SysPulse, a separate program.
 
 ## ssh

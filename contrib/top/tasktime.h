@@ -1,10 +1,10 @@
 /*
  * tasktime.h - CPU time per task, memory and system figures for AmigaOS.
  *
- * Exec does not count the CPU time of tasks.  tt_open() gives every task a
- * launch and a switch hook (tc_Launch, tc_Switch) that time each slice
- * with the E-clock; earlier hooks of a task are still called.  tt_close()
- * takes them away again.  The time no task used is idle time.
+ * Exec does not count the CPU time of tasks.  tt_open() adds a vertical
+ * blank interrupt server that notes, 50 or 60 times a second, which task
+ * is running or that the CPU is idle; tt_sample() turns those notes into
+ * shares of the CPU.  tt_close() removes the server.
  */
 #ifndef TASKTIME_H
 #define TASKTIME_H
@@ -27,7 +27,7 @@ typedef struct TaskInfo {
     ULONG stack_used;            /* at the moment, from its stack pointer */
     ULONG sigwait;               /* signals it waits for                */
     ULONG cpu;                   /* share of the CPU, 0..1000 (per mille), last interval */
-    ULONG cpu_ms;                /* CPU time since tt_open(), milliseconds */
+    ULONG cpu_ms;                /* CPU time since tt_open(), milliseconds (from the notes) */
 } TaskInfo;
 
 typedef struct SysInfo {

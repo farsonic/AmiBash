@@ -30,11 +30,9 @@ Then one line per task:
 * stack used and stack size, CLI number;
 * the name, or for a CLI the command it runs.
 
-Exec doesn't count the CPU time of tasks. `top` gives every task a launch
-and a switch hook, times each slice with the E-clock, and takes the hooks
-away when it quits; any hooks a task had before are still called. The
-measuring code (`tasktime.c`, `tasktime.h`, `tthooks.s`) is shared with
-SysPulse, the graphical monitor: keep the copies the same.
-
-On AROS, `tc_Switch` is only called when a task is preempted, so the time
-of tasks that mostly wait, and with it the total, comes out too low there.
+Exec doesn't count the CPU time of tasks. `top` adds a vertical blank
+interrupt server that notes, 50 or 60 times a second, which task is running
+or that the CPU is idle. A task's share is its share of those notes, so the
+figures are samples: at a 2-second interval one frame is 1%. The measuring
+code (`tasktime.c`, `tasktime.h`, `tthooks.s`) is shared with SysPulse, the
+graphical monitor: keep the copies the same.

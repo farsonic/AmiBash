@@ -1,10 +1,19 @@
 /*
  * tasktime.c - CPU time per task, memory and system figures for AmigaOS.
  * See tasktime.h.
+ *
+ * A vertical blank interrupt server notes, 50 or 60 times a second, the
+ * task that is running (or that the CPU is idle) in a ring; tt_sample()
+ * counts those notes.  Exec's own task switching is left alone: hooks on
+ * tc_Launch and tc_Switch run inside the dispatcher, where calling
+ * timer.device (or anything that does Disable()/Enable()) locks up
+ * Kickstart 3.x.
  */
 #include <exec/execbase.h>
 #include <exec/memory.h>
 #include <exec/tasks.h>
+#include <exec/interrupts.h>
+#include <hardware/intbits.h>
 #include <dos/dosextens.h>
 #include <devices/timer.h>
 #include <graphics/gfxbase.h>
@@ -16,41 +25,51 @@
 #include "tasktime.h"
 
 extern struct ExecBase *SysBase;
-struct Device *TimerBase;               /* ReadEClock(), also in the hooks */
+struct Device *TimerBase;               /* ReadEClock() for the intervals */
 
-void tt_launch_stub(void);              /* tthooks.s */
-void tt_switch_stub(void);
+void tt_vblank(void);                   /* tthooks.s: calls tt_tick() */
 
-/*
- * One slot per task we timed.  The hooks look a task up by its address;
- * the main program adds and removes slots only in Forbid(), when no task
- * switch and so no hook can happen.
- */
+/* ---- the interrupt side ------------------------------------------------- */
+
+#define RING 1024                       /* notes: > 10 s at 60 Hz */
+#define IDLE ((struct Task *)0)
+
+static struct Task *volatile ring[RING];
+static volatile ULONG ring_head;        /* written only by the interrupt */
+static struct Interrupt vbint;
+
+void tt_tick(void)
+{
+    struct Task *t = SysBase->ThisTask;
+    ULONG h = ring_head;
+    /* while exec idles, ThisTask is the last task, no longer running */
+    ring[h % RING] = t && t->tc_State == TS_RUN ? t : IDLE;
+    ring_head = h + 1;
+}
+
+/* ---- tasks' totals -------------------------------------------------------- */
+
 #define NSLOT 512
 #define TOMB  ((struct Task *)1)
 
 typedef struct Slot {
     struct Task *task;
-    APTR name;                          /* its name pointer: a new task in old memory has another */
-    UBYTE oldflags;                     /* its own TF_LAUNCH / TF_SWITCH  */
-    UBYTE running;                      /* launched, not switched out yet */
+    APTR name;                          /* a new task in old memory has another name pointer */
+    ULONG ticks;                        /* notes in this interval        */
+    ULONG total;                        /* notes since tt_open()         */
     UBYTE seen;
-    UBYTE pad;
-    void (*oldlaunch)(void);
-    void (*oldswitch)(void);
-    ULONG in;                           /* E-clock (low word) at launch   */
-    ULONG acc_hi, acc_lo;               /* E-clock ticks it ran           */
-    ULONG prev_hi, prev_lo;             /* acc at the previous sample     */
 } Slot;
 
 static Slot slots[NSLOT];
+static ULONG ring_tail;
 static struct MsgPort *tport;
 static struct timerequest *treq;
 static struct EClockVal last;
 static ULONG efreq;
 static ULONG lastdisp;
-static unsigned long long uptime;     /* E-clock ticks since tt_open() */
-static int opened;
+static unsigned long long uptime;       /* E-clock ticks since tt_open() */
+static UWORD vbfreq;
+static int opened, inted;
 
 static ULONG hash(struct Task *t)
 {
@@ -76,62 +95,11 @@ static Slot *insert(struct Task *t)
         if (s->task == NULL || s->task == TOMB) {
             memset(s, 0, sizeof(*s));
             s->task = t;
+            s->name = t->tc_Node.ln_Name;
             return s;
         }
     }
     return NULL;
-}
-
-/* ---- the hooks (called by exec while it switches tasks) ---------------- */
-
-ULONG tt_launch(void)
-{
-    Slot *s = find(SysBase->ThisTask);
-    struct EClockVal e;
-    if (!s) return 0;
-    ReadEClock(&e);
-    s->in = e.ev_lo;
-    s->running = 1;
-    return (s->oldflags & TF_LAUNCH) ? (ULONG)s->oldlaunch : 0;
-}
-
-ULONG tt_switch(void)
-{
-    Slot *s = find(SysBase->ThisTask);
-    struct EClockVal e;
-    ULONG d;
-    if (!s) return 0;
-    if (s->running) {
-        ReadEClock(&e);
-        d = e.ev_lo - s->in;            /* a slice is far shorter than 2^32 ticks */
-        s->acc_lo += d;
-        if (s->acc_lo < d) s->acc_hi++;
-        s->running = 0;
-    }
-    return (s->oldflags & TF_SWITCH) ? (ULONG)s->oldswitch : 0;
-}
-
-/* ---- giving tasks the hooks and taking them back -------------------- */
-
-static void hook(struct Task *t, Slot *s)
-{
-    if (t->tc_Launch != (void (*)())tt_launch_stub) {
-        s->oldflags = t->tc_Flags & (TF_LAUNCH | TF_SWITCH);
-        s->oldlaunch = (void (*)(void))t->tc_Launch;
-        s->oldswitch = (void (*)(void))t->tc_Switch;
-    }
-    s->name = t->tc_Node.ln_Name;
-    t->tc_Launch = (void (*)())tt_launch_stub;
-    t->tc_Switch = (void (*)())tt_switch_stub;
-    t->tc_Flags |= TF_LAUNCH | TF_SWITCH;
-}
-
-static void unhook(struct Task *t, Slot *s)
-{
-    if (t->tc_Launch != (void (*)())tt_launch_stub) return;
-    t->tc_Launch = (void (*)())s->oldlaunch;
-    t->tc_Switch = (void (*)())s->oldswitch;
-    t->tc_Flags = (t->tc_Flags & ~(TF_LAUNCH | TF_SWITCH)) | s->oldflags;
 }
 
 /* call fn for every task: the running one, the ready and the waiting ones */
@@ -143,12 +111,6 @@ static void each_task(void (*fn)(struct Task *t, UBYTE state, void *ud), void *u
         fn((struct Task *)n, TS_READY, ud);
     for (n = SysBase->TaskWait.lh_Head; n->ln_Succ; n = n->ln_Succ)
         fn((struct Task *)n, TS_WAIT, ud);
-}
-
-static void restore_one(struct Task *t, UBYTE state, void *ud)
-{
-    Slot *s = find(t);
-    if (s) unhook(t, s);
 }
 
 int tt_open(void)
@@ -168,7 +130,16 @@ int tt_open(void)
     memset(slots, 0, sizeof(slots));
     efreq = ReadEClock(&last);
     lastdisp = SysBase->DispCount;
+    vbfreq = SysBase->VBlankFrequency ? SysBase->VBlankFrequency : 50;
     uptime = 0;
+    ring_head = ring_tail = 0;
+    vbint.is_Node.ln_Type = NT_INTERRUPT;
+    vbint.is_Node.ln_Pri = -60;
+    vbint.is_Node.ln_Name = "tasktime";
+    vbint.is_Data = NULL;
+    vbint.is_Code = (void (*)())tt_vblank;
+    AddIntServer(INTB_VERTB, &vbint);
+    inted = 1;
     opened = 1;
     return 0;
 }
@@ -176,9 +147,8 @@ int tt_open(void)
 void tt_close(void)
 {
     if (!opened) return;
-    Forbid();
-    each_task(restore_one, NULL);       /* only tasks that are still there */
-    Permit();
+    if (inted) RemIntServer(INTB_VERTB, &vbint);
+    inted = 0;
     CloseDevice(&treq->tr_node);
     DeleteIORequest((struct IORequest *)treq);
     DeleteMsgPort(tport);
@@ -191,8 +161,6 @@ typedef struct Collect {
     TaskInfo *ti;
     int max, n;
     SysInfo *sys;
-    ULONG now;
-    ULONG busy;                         /* ticks all tasks ran            */
 } Collect;
 
 static void bcopy_bstr(char *dst, BSTR b, int len)
@@ -211,7 +179,6 @@ static void collect_one(struct Task *t, UBYTE state, void *ud)
 {
     Collect *c = ud;
     Slot *s = find(t);
-    ULONG d = 0;
     c->sys->ntasks++;
     if (state == TS_READY) c->sys->nready++;
     if (state == TS_WAIT) c->sys->nwait++;
@@ -220,24 +187,8 @@ static void collect_one(struct Task *t, UBYTE state, void *ud)
         s->task = TOMB;
         s = NULL;
     }
-    if (!s) {
-        s = insert(t);
-        if (s) {
-            hook(t, s);
-            if (state == TS_RUN) {
-                s->running = 1;
-                s->in = c->now;
-            }
-        }
-    } else if (t->tc_Launch != (void (*)())tt_launch_stub)
-        hook(t, s);                     /* someone set its hooks since */
-    if (s) {
-        s->seen = 1;
-        d = s->acc_lo - s->prev_lo;
-        s->prev_hi = s->acc_hi;
-        s->prev_lo = s->acc_lo;
-        c->busy += d;
-    }
+    if (!s) s = insert(t);
+    if (s) s->seen = 1;
     if (c->n < c->max) {
         TaskInfo *i = &c->ti[c->n++];
         const char *nm = t->tc_Node.ln_Name;
@@ -265,9 +216,9 @@ static void collect_one(struct Task *t, UBYTE state, void *ud)
             }
         }
         if (s) {
-            /* ticks for now; the CPU share is worked out after Permit() */
-            i->cpu = d;
-            i->cpu_ms = (ULONG)((((unsigned long long)s->acc_hi << 32) | s->acc_lo) * 1000 / efreq);
+            /* notes for now; the CPU share is worked out after Permit() */
+            i->cpu = s->ticks;
+            i->cpu_ms = s->total * 1000 / vbfreq;
         }
     }
 }
@@ -294,20 +245,37 @@ int tt_sample(SysInfo *sys, TaskInfo *ti, int max)
 {
     Collect c;
     struct EClockVal now;
-    ULONG elapsed, busy = 0, disp;
+    ULONG elapsed, head, notes, idle = 0, disp, k;
     int i;
-    ULONG k;
 
     memset(sys, 0, sizeof(*sys));
     c.ti = ti;
     c.max = max;
     c.n = 0;
     c.sys = sys;
-    c.busy = 0;
     Forbid();
     ReadEClock(&now);
-    c.now = now.ev_lo;
-    for (k = 0; k < NSLOT; k++) slots[k].seen = 0;
+    /* count the notes since the last time */
+    for (k = 0; k < NSLOT; k++) {
+        slots[k].ticks = 0;
+        slots[k].seen = 0;
+    }
+    head = ring_head;
+    if (head - ring_tail > RING) ring_tail = head - RING;
+    notes = head - ring_tail;
+    for (; ring_tail != head; ring_tail++) {
+        struct Task *t = ring[ring_tail % RING];
+        Slot *s;
+        if (t == IDLE) {
+            idle++;
+            continue;
+        }
+        if (!(s = find(t)) && t->tc_Node.ln_Type != 0) s = insert(t);
+        if (s) {
+            s->ticks++;
+            s->total++;
+        }
+    }
     each_task(collect_one, &c);
     /* slots of tasks that ended */
     for (k = 0; k < NSLOT; k++)
@@ -324,13 +292,9 @@ int tt_sample(SysInfo *sys, TaskInfo *ti, int max)
     sys->uptime_s = (ULONG)(uptime / efreq);
     sys->dispatches = disp - lastdisp;
     lastdisp = disp;
-    for (i = 0; i < c.n; i++) {
-        ULONG d = ti[i].cpu;
-        ti[i].cpu = tt_permille(d, elapsed);
-    }
-    busy = c.busy;
-    sys->cpu = tt_permille(busy, elapsed);
-    sys->timed = 1;
+    for (i = 0; i < c.n; i++) ti[i].cpu = tt_permille(ti[i].cpu, notes);
+    sys->cpu = notes ? 1000 - tt_permille(idle, notes) : 0;
+    sys->timed = notes > 0;
     mem(MEMF_CHIP, &sys->chip_free, &sys->chip_total, &sys->chip_largest);
     mem(MEMF_FAST, &sys->fast_free, &sys->fast_total, &sys->fast_largest);
     return c.n;
