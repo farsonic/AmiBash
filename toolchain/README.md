@@ -14,7 +14,7 @@ cloud session. Everything goes under `/home/user/toolchain`; the AmiBash
 | Xvfb, xdotool, ImageMagick | a virtual display, typing and screenshots for FS-UAE | apt |
 | lha, zip | release archives | apt |
 | InstallerLG | runs `dist/Install-AmiBash` on Linux | built from source |
-| bebbo's m68k-amigaos-gcc | optional: ports that need gcc and libnix | `toolchain/amiga` |
+| bebbo's m68k-amigaos-gcc | `ssh` and `ssh-keygen` (`contrib/ssh`), and other ports that need gcc and libnix | `toolchain/amiga` |
 
 ## 1. System packages
 
@@ -185,10 +185,11 @@ Aminet (`util/sys`, InstallerLG 1.0.3), unpack it, and run:
 cd InstallerLG-1.0.3/build && make INTERFACE=CLI
 ```
 
-## 7. bebbo's m68k-amigaos-gcc (optional)
+## 7. bebbo's m68k-amigaos-gcc
 
-AmiBash doesn't need it, but ports written for gcc and libnix do. The build
-takes about 20 minutes with 4 cores and 4 GB of disk.
+bash itself is built with vbcc, but `contrib/ssh` (OpenSSH) is built with
+gcc and libnix, so `dist/make_release.sh` needs it. The build takes about
+20 minutes with 4 cores and 4 GB of disk.
 
 ```sh
 apt-get install -y gperf texinfo rsync libgmp-dev libmpfr-dev libmpc-dev bison flex autoconf
@@ -199,6 +200,20 @@ cd amiga-gcc && make min ndk -j4 PREFIX=/home/user/toolchain/amiga
 
 The result is `/home/user/toolchain/amiga/bin/m68k-amigaos-gcc`; link with
 `-noixemul` for libnix.
+
+Two things to know about libnix when porting:
+
+* **`__stack`:** setting it alone doesn't give the program a bigger stack.
+  Also refer to `__stkinit` (`void *ref = __stkinit;`), or the startup code
+  that switches stacks isn't linked in.
+* **Socket calls:** libnix's `getaddrinfo()`/`getnameinfo()` call
+  Roadshow-only `bsdsocket.library` functions without checking that they
+  exist, so avoid them on other TCP/IP stacks.
+
+To test networking, add `bsdsocket_library = 1` to an FS-UAE config. That
+gives the Amiga a `bsdsocket.library` that uses the host's network (the
+RTG config `emu/arosrtg.fs-uae` has it), so a test `sshd` on the host is
+reachable at 127.0.0.1.
 
 ## In a cloud session
 

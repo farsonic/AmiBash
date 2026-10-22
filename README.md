@@ -44,7 +44,8 @@ Installer, in `SYS:Utilities` or `C:` on OS 3.x). It picks the 68000 or
 `C:`, the example `S:bashrc` (an existing one is kept as `S:bashrc.old`),
 the AmiBashMono fonts, `InstallTTF`, the DejaVu Sans Mono TrueType font for
 smooth text with AAText on RTG, an *AmiBash Terminal* icon in `SYS:Tools`,
-and optionally `Resident C:bash PURE` in `S:User-Startup`.
+`ssh` and `ssh-keygen` (68020+), and optionally `Resident C:bash PURE` in
+`S:User-Startup`.
 
 By hand:
 
@@ -242,6 +243,32 @@ made resident: `Resident C:bash PURE`. (A 1 MB Amiga has room for one tab;
 * `uname -a` names the build, e.g. `AmigaOS amiga 3.2 AmiBash 0.1 (68020
   build) 21.10.2026 m68k 68030 Amiga AmigaOS`: Kickstart release, AmiBash
   version and build, CPU. `bash --version` and `$BASH_VERSION` too.
+
+## ssh
+
+The archive's `SSH` drawer has **ssh** and **ssh-keygen** from OpenSSH 10.6p1,
+the client and key generator, for a 68020 or better with a TCP/IP stack
+(Roadshow, AmiTCP, Miami or Genesis). They're built without OpenSSL:
+
+* **Algorithms:** ed25519 keys; curve25519 and the post-quantum sntrup761
+  and ML-KEM key exchanges; ChaCha20-Poly1305 and AES-CTR. That covers any
+  current OpenSSH server, but not hosts that only offer RSA.
+
+```
+ssh user@host                  # interactive, best in the AmiBash Terminal
+ssh user@host 'df -h'          # a command
+ssh-keygen -t ed25519          # $HOME/.ssh/id_ed25519
+```
+
+* **Files:** `~/.ssh` is `$HOME/.ssh`, which is `SYS:.ssh` unless `HOME` is
+  set. System-wide `ssh_config` and `ssh_known_hosts` go in `ENVARC:ssh`.
+* **Terminal:** the remote side gets `TERM=ansi`. Full-screen programs such
+  as `less` work in the AmiBash Terminal.
+* **Not supported:** whatever needs `fork()`, namely ProxyCommand,
+  ControlMaster, `-f`, ssh-agent and X11 forwarding, as well as `scp`/`sftp`.
+
+`contrib/ssh/README.md` has the details, including how random numbers are
+made without `/dev/urandom` and how to build it.
 
 ## Line editing, colours and fonts
 

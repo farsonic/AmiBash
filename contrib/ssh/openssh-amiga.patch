@@ -1,0 +1,219 @@
+diff --git a/hostfile.c b/hostfile.c
+index 033b291..8aae060 100644
+--- a/hostfile.c
++++ b/hostfile.c
+@@ -548,6 +548,17 @@ add_host_to_hostfile(const char *filename, const char *host,
+ 	if (key == NULL)
+ 		return 1;	/* XXX ? */
+ 	hostfile_create_user_ssh_dir(filename, 0);
++#ifdef __amigaos__
++	/* libnix can't seek or write in an "a+" stream: look, then append */
++	if ((f = fopen(filename, "r")) != NULL) {
++		if (fseek(f, -1L, SEEK_END) == 0 && fgetc(f) != '\n')
++			addnl = 1;
++		fclose(f);
++	}
++	if ((f = fopen(filename, "a")) == NULL)
++		return 0;
++	if (addnl && fputc('\n', f) != '\n') {
++#else
+ 	if ((f = fopen(filename, "a+")) == NULL)
+ 		return 0;
+ 	setvbuf(f, NULL, _IONBF, 0);
+@@ -555,6 +566,7 @@ add_host_to_hostfile(const char *filename, const char *host,
+ 	if (fseek(f, -1L, SEEK_END) == 0 && fgetc(f) != '\n')
+ 		addnl = 1;
+ 	if (fseek(f, 0L, SEEK_END) != 0 || (addnl && fputc('\n', f) != '\n')) {
++#endif
+ 		error("Failed to add terminating newline to %s: %s",
+ 		   filename, strerror(errno));
+ 		fclose(f);
+diff --git a/misc.c b/misc.c
+index 866f7b8..460e6fe 100644
+--- a/misc.c
++++ b/misc.c
+@@ -538,6 +538,26 @@ strdelimw(char **s)
+ 	return strdelim_internal(s, 0);
+ }
+ 
++/*
++ * The separator to put between a directory and a name in it: none after
++ * a '/', or after the ':' of an AmigaDOS volume or assign ("SYS:").
++ */
++const char *
++dir_sep(const char *dir)
++{
++	size_t len = strlen(dir);
++
++	if (len == 0)
++		return "/";
++	if (dir[len - 1] == '/')
++		return "";
++#ifdef __amigaos__
++	if (dir[len - 1] == ':')
++		return "";
++#endif
++	return "/";
++}
++
+ struct passwd *
+ pwcopy(struct passwd *pw)
+ {
+@@ -1319,7 +1339,7 @@ tilde_expand(const char *filename, uid_t uid, char **retp)
+ 	}
+ 
+ 	/* Make sure directory has a trailing '/' */
+-	slash = (len = strlen(pw->pw_dir)) == 0 || pw->pw_dir[len - 1] != '/';
++	slash = *dir_sep(pw->pw_dir) != '\0';
+ 
+ 	if ((r = xasprintf(&s, "%s%s%s", pw->pw_dir,
+ 	    slash ? "/" : "", path != NULL ? path : "")) <= 0) {
+@@ -1609,6 +1629,10 @@ sanitise_stdfd(void)
+ {
+ 	int nullfd, dupfd;
+ 
++#ifdef __amigaos__
++	/* libnix always has 0, 1 and 2, and can't open NIL: for O_RDWR */
++	return;
++#endif
+ 	if ((nullfd = dupfd = open(_PATH_DEVNULL, O_RDWR)) == -1) {
+ 		fprintf(stderr, "Couldn't open /dev/null: %s\n",
+ 		    strerror(errno));
+@@ -2816,6 +2840,14 @@ stdfd_devnull(int do_stdin, int do_stdout, int do_stderr)
+ {
+ 	int devnull, ret = 0;
+ 
++#ifdef __amigaos__
++	/*
++	 * libnix's dup2() copies the descriptor without counting: NIL: on
++	 * 0, 1 or 2 would be Close()d twice.  ssh needs it only so that the
++	 * end of a session channel reaches the terminal; leave them be.
++	 */
++	return 0;
++#endif
+ 	if ((devnull = open(_PATH_DEVNULL, O_RDWR)) == -1) {
+ 		error_f("open %s: %s", _PATH_DEVNULL,
+ 		    strerror(errno));
+diff --git a/misc.h b/misc.h
+index 0784f37..1961d2a 100644
+--- a/misc.h
++++ b/misc.h
+@@ -88,6 +88,7 @@ double	 convtime_double(const char *);
+ const char *fmt_timeframe(time_t t);
+ int	 tilde_expand(const char *, uid_t, char **);
+ char	*tilde_expand_filename(const char *, uid_t);
++const char *dir_sep(const char *);
+ 
+ char	*dollar_expand(int *, const char *string, ...);
+ char	*percent_expand(const char *, ...) __attribute__((__sentinel__));
+diff --git a/openbsd-compat/getrrsetbyname.c b/openbsd-compat/getrrsetbyname.c
+index 36e558c..793567c 100644
+--- a/openbsd-compat/getrrsetbyname.c
++++ b/openbsd-compat/getrrsetbyname.c
+@@ -47,7 +47,24 @@
+ 
+ #include "includes.h"
+ 
+-#if !defined (HAVE_GETRRSETBYNAME) && !defined (HAVE_LDNS)
++#if !defined (HAVE_GETRRSETBYNAME) && !defined (HAVE_LDNS) && defined(__amigaos__)
++
++/* AmigaOS has no resolver library for DNS records (SSHFP) */
++#include "getrrsetbyname.h"
++
++int
++getrrsetbyname(const char *hostname, unsigned int rdclass,
++    unsigned int rdtype, unsigned int flags, struct rrsetinfo **res)
++{
++	return (ERRSET_FAIL);
++}
++
++void
++freerrset(struct rrsetinfo *rrset)
++{
++}
++
++#elif !defined (HAVE_GETRRSETBYNAME) && !defined (HAVE_LDNS)
+ 
+ #include <stdlib.h>
+ #include <string.h>
+diff --git a/openbsd-compat/readpassphrase.c b/openbsd-compat/readpassphrase.c
+index 43b7128..e24b4ba 100644
+--- a/openbsd-compat/readpassphrase.c
++++ b/openbsd-compat/readpassphrase.c
+@@ -25,7 +25,7 @@
+ 
+ #include "includes.h"
+ 
+-#ifndef HAVE_READPASSPHRASE
++#if !defined(HAVE_READPASSPHRASE) && !defined(__amigaos__)	/* port-amiga-io.c */
+ 
+ #include <termios.h>
+ #include <signal.h>
+diff --git a/smult_curve25519_ref.c b/smult_curve25519_ref.c
+index 2e69934..49d72fd 100644
+--- a/smult_curve25519_ref.c
++++ b/smult_curve25519_ref.c
+@@ -107,6 +107,9 @@ static void square(unsigned int out[32],const unsigned int a[32])
+   squeeze(out);
+ }
+ 
++#ifdef __amigaos__
++#define select curve25519_select	/* libnix declares select() everywhere */
++#endif
+ static void select(unsigned int p[64],unsigned int q[64],const unsigned int r[64],const unsigned int s[64],unsigned int b)
+ {
+   unsigned int j;
+diff --git a/ssh-keygen.c b/ssh-keygen.c
+index 5c2d645..a1f7730 100644
+--- a/ssh-keygen.c
++++ b/ssh-keygen.c
+@@ -278,7 +278,7 @@ ask_filename(struct passwd *pw, const char *prompt)
+ 		}
+ 	}
+ 	snprintf(identity_file, sizeof(identity_file),
+-	    "%s/%s", pw->pw_dir, name);
++	    "%s%s%s", pw->pw_dir, dir_sep(pw->pw_dir), name);
+ 	printf("%s (%s): ", prompt, identity_file);
+ 	fflush(stdout);
+ 	if (fgets(buf, sizeof(buf), stdin) == NULL)
+diff --git a/ssh.c b/ssh.c
+index fe660ef..3782303 100644
+--- a/ssh.c
++++ b/ssh.c
+@@ -578,8 +578,8 @@ process_config_files(const char *host_name, struct passwd *pw,
+ 			fatal("Can't open user config file %.100s: "
+ 			    "%.100s", config, strerror(errno));
+ 	} else {
+-		r = snprintf(buf, sizeof buf, "%s/%s", pw->pw_dir,
+-		    _PATH_SSH_USER_CONFFILE);
++		r = snprintf(buf, sizeof buf, "%s%s%s", pw->pw_dir,
++		    dir_sep(pw->pw_dir), _PATH_SSH_USER_CONFFILE);
+ 		if (r > 0 && (size_t)r < sizeof(buf))
+ 			(void)read_config_file(buf, pw, host, host_name, cmd,
+ 			    &options, SSHCONF_CHECKPERM | SSHCONF_USERCONF |
+@@ -2202,6 +2202,11 @@ ssh_session2_setup(struct ssh *ssh, int id, int success, void *arg)
+ 	if ((term = lookup_env_in_list("TERM", options.setenv,
+ 	    options.num_setenv)) == NULL || *term == '\0')
+ 		term = getenv("TERM");
++#ifdef __amigaos__
++	/* the AmiBash terminal and the Amiga console speak ANSI */
++	if (term == NULL || *term == '\0')
++		term = "ansi";
++#endif
+ 	client_session2_setup(ssh, id, tty_flag,
+ 	    options.session_type == SESSION_TYPE_SUBSYSTEM, term,
+ 	    NULL, fileno(stdin), command, environ);
+diff --git a/umac.c b/umac.c
+index 66e6ffe..55b7b87 100644
+--- a/umac.c
++++ b/umac.c
+@@ -94,6 +94,9 @@ typedef uint8_t	UINT8;  /* 1 byte   */
+ typedef uint16_t	UINT16; /* 2 byte   */
+ typedef uint32_t	UINT32; /* 4 byte   */
+ typedef uint64_t	UINT64; /* 8 bytes  */
++#ifdef __amigaos__
++#define UWORD umac_UWORD	/* exec/types.h has a 16-bit UWORD */
++#endif
+ typedef unsigned int	UWORD;  /* Register */
+ 
+ /* ---------------------------------------------------------------------- */

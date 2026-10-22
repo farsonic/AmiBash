@@ -1,4 +1,4 @@
-; $VER: Install-AmiBash 1.0 (21.10.2026)
+; $VER: Install-AmiBash 1.1 (22.10.2026)
 ;
 ; Installs AmiBash with the standard Amiga Installer (OS 3.x) or
 ; InstallerLG.  Double-click its icon, or from the Shell:
@@ -10,6 +10,7 @@
 ; the 68020 build where it can run
 (set #cpu (database "cpu"))
 (if (patmatch "680[01]0" #cpu) (set #bin "bash") (set #bin "bash020"))
+(set #has020 (= #bin "bash020"))
 
 ; the archive's drawer: where this script was started from
 (set #here (pathonly @icon))
@@ -41,6 +42,10 @@
       "freetype2.library in LIBS:.\n\n"
       "AmiBash Terminal icon - in SYS:Tools, to open the terminal from "
       "Workbench.\n\n"
+      "ssh and ssh-keygen - OpenSSH's client and key generator, in C:. They "
+      "need a 68020 or better and a TCP/IP stack (Roadshow, AmiTCP, Miami or "
+      "Genesis). Keys and known hosts go in $HOME/.ssh, SYS:.ssh unless HOME "
+      "is set.\n\n"
       "Resident - loads bash once at startup (S:User-Startup), so every bash "
       "and terminal tab shares one copy in memory and starts at once.")
     (choices
@@ -50,8 +55,9 @@
       "InstallTTF in C:"
       "DejaVu Sans Mono TrueType font"
       "AmiBash Terminal icon in SYS:Tools"
+      "ssh and ssh-keygen in C: (68020+)"
       "Make bash resident at startup")
-    (default 63)))
+    (default (if #has020 127 63))))
 
 ; ---- bash --------------------------------------------------------------
 (if (in #opts 0)
@@ -124,8 +130,15 @@
     (copyfiles (source (tackon #here "Icons/AmiBash Terminal.info")) (dest #tools) (nogauge))
   ))
 
-; ---- resident ---------------------------------------------------------
+; ---- ssh ----------------------------------------------------------------
 (if (in #opts 6)
+  (if #has020
+    (copyfiles (source (tackon #here "SSH")) (dest "C:")
+      (choices "ssh" "ssh-keygen") (nogauge))
+    (message "ssh needs a 68020 or better; it was not installed.")))
+
+; ---- resident ---------------------------------------------------------
+(if (in #opts 7)
   (startup "AmiBash"
     (prompt "Adding \"Resident C:bash PURE\" to S:User-Startup")
     (help @startup-help)
@@ -137,5 +150,6 @@
   "(or type bash --term).\n\n"
   "For smooth TrueType text: an RTG screen with 15 bits or more, and "
   "AAText running (Aminet util/wb/AAText)."
-  (if (in #opts 6) "\n\nbash is made resident from the next reboot." "")
+  (if (in #opts 6) "\n\nssh: type ssh user@host. It needs a running TCP/IP stack." "")
+  (if (in #opts 7) "\n\nbash is made resident from the next reboot." "")
   (quiet))

@@ -1,10 +1,12 @@
 #!/bin/sh
-# Build both Amiga binaries (pure/resident builds) and pack AmiBash.lha
-# (needs jlha-utils "lha") and AmiBash-<version>-bin.zip.
+# Build both Amiga binaries (pure/resident builds), InstallTTF, ssh and
+# ssh-keygen (needs bebbo's m68k-amigaos-gcc, see contrib/ssh) and pack
+# AmiBash.lha (needs jlha-utils "lha") and AmiBash-<version>-bin.zip.
 set -e
 cd "$(dirname "$0")/.."
 make pure pure020
 make -C contrib/installttf
+make -C contrib/ssh
 V=$(sed -n 's/^#define AMIBASH_SHORTVER "\(.*\)"/\1/p' src/sh.h)
 R=$(mktemp -d)
 mkdir -p "$R/AmiBash/S" "$R/AmiBash/src" "$R/AmiBash/tools"
@@ -12,6 +14,9 @@ cp build/bash.pure "$R/AmiBash/bash"
 cp build/bash020.pure "$R/AmiBash/bash020"
 cp dist/bash.info "$R/AmiBash/"
 cp contrib/installttf/InstallTTF "$R/AmiBash/"
+mkdir -p "$R/AmiBash/SSH"
+cp contrib/ssh/ssh contrib/ssh/ssh-keygen "$R/AmiBash/SSH/"
+cp contrib/ssh/README.md "$R/AmiBash/SSH/ssh.readme"
 cp dist/Install-AmiBash "$R/AmiBash/"
 python3 tools/mkicon.py "$R/AmiBash/Install-AmiBash.info" Installer APPNAME=AmiBash MINUSER=AVERAGE >/dev/null
 mkdir -p "$R/AmiBash/Icons"

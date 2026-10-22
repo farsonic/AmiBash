@@ -1,0 +1,5 @@
+openssh-*/
+openssh-*.tar.gz
+*.part
+/ssh
+/ssh-keygen
