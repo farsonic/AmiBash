@@ -508,10 +508,149 @@ static int install(const char *path, ULONG face, struct Opts *o, ULONG *nfaces)
     return 1;
 }
 
+/* ---- METRICS: what diskfont makes of an installed font, and what AAText
+ * will do with it ---------------------------------------------------------- */
+
+/* top (yMax) of a TrueType glyph from glyf/loca, font units; -1 if unknown */
+static LONG glyph_top(Font *f, UWORD g)
+{
+    ULONG lo, ll, go, gl, a, b;
+    UBYTE h[54], e[8], hd[10];
+    int longoff;
+    if (!find_table(f, TAG('h', 'e', 'a', 'd'), &lo, &ll) || !read_at(f->fh, lo, h, 54)) return -1;
+    longoff = be16(h + 50) != 0;
+    if (!find_table(f, TAG('l', 'o', 'c', 'a'), &lo, &ll) || !find_table(f, TAG('g', 'l', 'y', 'f'), &go, &gl))
+        return -1;
+    if (longoff) {
+        if (!read_at(f->fh, lo + g * 4, e, 8)) return -1;
+        a = be32(e);
+        b = be32(e + 4);
+    } else {
+        if (!read_at(f->fh, lo + g * 2, e, 4)) return -1;
+        a = be16(e) * 2UL;
+        b = be16(e + 2) * 2UL;
+    }
+    if (b <= a || !read_at(f->fh, go + a, hd, 10)) return 0;
+    return (LONG)(WORD)be16(hd + 8);         /* numberOfContours, xMin, yMin, xMax, yMax */
+}
+
+/* first and last ink rows of a character in a bitmap font */
+static int ink_rows(struct TextFont *tf, UBYTE c, int *top, int *bot)
+{
+    const UBYTE *data = tf->tf_CharData;
+    ULONG loc;
+    int idx, bit0, w, x, y;
+    if (!data || !tf->tf_CharLoc || c < tf->tf_LoChar || c > tf->tf_HiChar) return 0;
+    idx = c - tf->tf_LoChar;
+    loc = ((ULONG *)tf->tf_CharLoc)[idx];
+    bit0 = (int)(loc >> 16);
+    w = (int)(loc & 0xFFFF);
+    *top = -1;
+    for (y = 0; y < tf->tf_YSize; y++) {
+        const UBYTE *row = data + y * tf->tf_Modulo;
+        for (x = 0; x < w; x++) {
+            int b = bit0 + x;
+            if (row[b >> 3] & (0x80 >> (b & 7))) {
+                if (*top < 0) *top = y;
+                *bot = y;
+                break;
+            }
+        }
+    }
+    return *top >= 0;
+}
+
+static int metrics(const char *fontname)
+{
+    char name[120], otag[160], path[300];
+    ULONG *tags = NULL;
+    LONG len, i;
+    ULONG face = 0;
+    BPTR fh;
+    Font f;
+    UWORD gf, gi, gl;
+    LONG topf = -1, topi = -1, topl = -1, adv;
+    int size;
+    sprintf(name, "%.110s", fontname);
+    if (strlen(name) > 5 && !Stricmp(name + strlen(name) - 5, ".font")) name[strlen(name) - 5] = 0;
+    sprintf(otag, "FONTS:%s.otag", name);
+    path[0] = 0;
+    if ((fh = Open((STRPTR)otag, MODE_OLDFILE)) != 0) {
+        Seek(fh, 0, OFFSET_END);
+        len = Seek(fh, 0, OFFSET_BEGINNING);
+        if (len > 8 && len < 100000 && (tags = AllocVec(len + 1, MEMF_CLEAR)) != NULL && Read(fh, tags, len) == len) {
+            for (i = 0; (i + 1) * 8 <= len && tags[i * 2]; i++) {
+                ULONG t = tags[i * 2], v = tags[i * 2 + 1];
+                if (t == (OT_Spec1 | OT_Indirect) && v < (ULONG)len) sprintf(path, "%.299s", (char *)tags + v);
+                if (t == OT_Spec1 + 5) face = v;
+            }
+        }
+        Close(fh);
+    }
+    if (tags) FreeVec(tags);
+    if (!path[0]) {
+        Printf((STRPTR)"%s: no FONTS:%s.otag with a font file\n", (ULONG)fontname, (ULONG)name);
+        return 0;
+    }
+    if (!font_open(&f, path, face) || !font_info(&f)) {
+        font_close(&f);
+        Printf((STRPTR)"%s: cannot read %s\n", (ULONG)fontname, (ULONG)path);
+        return 0;
+    }
+    {
+        ULONG cl;
+        UBYTE *cm = load_table(&f, TAG('c', 'm', 'a', 'p'), &cl);
+        gf = cm ? glyph_of(cm, cl, 'f') : 0;
+        gi = cm ? glyph_of(cm, cl, 'i') : 0;
+        gl = cm ? glyph_of(cm, cl, 'l') : 0;
+        if (cm) FreeVec(cm);
+        if (gf) topf = glyph_top(&f, gf);
+        if (gi) topi = glyph_top(&f, gi);
+        if (gl) topl = glyph_top(&f, gl);
+    }
+    adv = f.space_adv;
+    font_close(&f);
+    Printf((STRPTR)"%s (%s)\n  upem %ld, advance %ld, top of f/i/l %ld/%ld/%ld\n", (ULONG)name, (ULONG)path,
+           (ULONG)f.upem, adv, topf, topi, topl);
+    Printf((STRPTR)"  size: YSize XSize Baseline | bitmap ink rows f i l H | AAText px, rows f/i need, room\n");
+    Flush(Output());
+    for (size = 10; size <= 24; size++) {
+        struct TextAttr ta;
+        struct TextFont *tf;
+        char tn[140];
+        int t[4], b[4], k, px, need, room;
+        static const char ch[4] = {'f', 'i', 'l', 'H'};
+        sprintf(tn, "%s.font", name);
+        ta.ta_Name = (STRPTR)tn;
+        ta.ta_YSize = (UWORD)size;
+        ta.ta_Style = 0;
+        ta.ta_Flags = 0;
+        if (!DiskfontBase || !(tf = OpenDiskFont(&ta))) {
+            Printf((STRPTR)"  %2ld: cannot open\n", (ULONG)size);
+            continue;
+        }
+        Printf((STRPTR)"  %2ld: %3ld %3ld %3ld |", (ULONG)size, (ULONG)tf->tf_YSize, (ULONG)tf->tf_XSize,
+               (ULONG)tf->tf_Baseline);
+        for (k = 0; k < 4; k++) {
+            if (ink_rows(tf, (UBYTE)ch[k], &t[k], &b[k])) Printf((STRPTR)" %ld-%ld", (ULONG)t[k], (ULONG)b[k]);
+            else Printf((STRPTR)" -");
+        }
+        /* AAText (safe metrics): the pixel size whose advance fills the cell */
+        px = adv > 0 ? (int)((tf->tf_XSize * (LONG)f.upem + adv / 2) / adv) : 0;
+        need = topf > topi ? (int)((topf * px + f.upem - 1) / f.upem) : (int)((topi * px + f.upem - 1) / f.upem);
+        room = tf->tf_Baseline + 1;
+        Printf((STRPTR)" | %ld, %ld, %ld%s\n", (ULONG)px, (ULONG)need, (ULONG)room,
+               (ULONG)(need > room ? "  <- cut off" : ""));
+        Flush(Output());
+        CloseFont(tf);
+    }
+    return 1;
+}
+
 int main(void)
 {
-    static const char tmpl[] = "FILES/M/A,NAME/K,FACE/N,CHARSET/K,ENGINE/K,SIZES/K,TO/K,COPY/S,REPLACE/S,INFO/S,NOCHECK/S";
-    LONG args[11];
+    static const char tmpl[] = "FILES/M/A,NAME/K,FACE/N,CHARSET/K,ENGINE/K,SIZES/K,TO/K,COPY/S,REPLACE/S,INFO/S,NOCHECK/S,METRICS/S";
+    LONG args[12];
     struct RDArgs *rd;
     struct Opts o;
     char **files;
@@ -541,6 +680,15 @@ int main(void)
     o.replace = args[8] != 0;
     o.info = args[9] != 0;
     o.nocheck = args[10] != 0;
+    if (args[11]) {
+        /* METRICS: FILES are installed font names */
+        for (files = (char **)args[0]; *files; files++)
+            if (!metrics(*files)) rc = RETURN_WARN;
+        FreeArgs(rd);
+        if (GfxBase) CloseLibrary((struct Library *)GfxBase);
+        if (DiskfontBase) CloseLibrary(DiskfontBase);
+        return rc;
+    }
     if (!o.engine) {
         /* aatext.library (from AAText) if it is there, else freetype2.library */
         o.engine = exists("LIBS:aatext.library") || !exists("LIBS:freetype2.library") ? "aatext" : "freetype2";

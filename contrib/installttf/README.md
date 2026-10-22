@@ -22,6 +22,7 @@ AAText, or freetype2.library), and AAText draws it anti-aliased on RTG.
 | `REPLACE` | overwrite a font of the same name |
 | `INFO` | only show what would be installed |
 | `NOCHECK` | do not open the installed font as a check |
+| `METRICS` | `FILES` are installed font names: show, for sizes 10-24, what diskfont makes of the font (YSize, XSize, Baseline, ink rows) and the size AAText will draw it at, marking sizes where AAText's letters will be cut off at the top |
 
 Examples:
 
