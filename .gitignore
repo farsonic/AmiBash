@@ -12,3 +12,14 @@ emu/dh0/ENV/
 emu/envdir/
 emu/dh0/Fonts/AmiBashMono*
 emu/dh0/Fonts/DejaVuSansMono.ttf
+# emulator test leftovers: installed copies, test fonts, probe output, logs
+emu/dh0/AmiBash/
+emu/dh0/C/InstallTTF
+emu/dh0/C/rtgscreen
+emu/dh0/C/swaptest
+emu/dh0/C/ttprobe
+emu/dh0/Fonts/*.ttf
+emu/dh0/*.log
+emu/dh0/*.out
+emu/dh0/*.ppm
+emu/dh0/autorun.done
