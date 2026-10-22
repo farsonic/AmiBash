@@ -31,8 +31,20 @@ ssh-keygen -t ed25519             # make a key: $HOME/.ssh/id_ed25519
   SHA-512 together with a seed file, `ENVARC:ssh/random_seed`, which every
   run replaces. The Amiga has no hardware random number generator, so the
   seed file matters: it carries what earlier runs gathered.
-* **TERM:** the remote side gets `TERM=ansi` when `TERM` isn't set. The AmiBash
-  Terminal understands what the `ansi` terminfo entry uses.
+* **TERM:** when `TERM` isn't set, the remote side gets `xterm-256color` in the
+  AmiBash Terminal. That is enough for colour prompts, `ls` colours, Vim and
+  `less`; the terminal maps 256-colour and 24-bit colours to its 8. In a
+  plain Amiga console it gets `ansi`.
+* **Keys:** the Amiga's keys arrive as CSI sequences; `ssh` turns them into
+  what a Unix host expects:
+
+  | Amiga key | Sent as |
+  |---|---|
+  | cursor keys | `ESC [ A`… |
+  | F1–F10 | xterm's codes |
+  | Help | `ESC [ 28 ~` |
+  | Del | `ESC [ 3 ~` |
+  | Insert, Home, End, Page Up/Down (PC keymaps) | their xterm codes |
 
 **Not supported:** everything that needs `fork()` or Unix sockets, namely:
 

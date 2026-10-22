@@ -177,7 +177,7 @@ index 5c2d645..a1f7730 100644
  	fflush(stdout);
  	if (fgets(buf, sizeof(buf), stdin) == NULL)
 diff --git a/ssh.c b/ssh.c
-index fe660ef..3782303 100644
+index fe660ef..ae0675f 100644
 --- a/ssh.c
 +++ b/ssh.c
 @@ -578,8 +578,8 @@ process_config_files(const char *host_name, struct passwd *pw,
@@ -191,14 +191,21 @@ index fe660ef..3782303 100644
  		if (r > 0 && (size_t)r < sizeof(buf))
  			(void)read_config_file(buf, pw, host, host_name, cmd,
  			    &options, SSHCONF_CHECKPERM | SSHCONF_USERCONF |
-@@ -2202,6 +2202,11 @@ ssh_session2_setup(struct ssh *ssh, int id, int success, void *arg)
+@@ -2202,6 +2202,18 @@ ssh_session2_setup(struct ssh *ssh, int id, int success, void *arg)
  	if ((term = lookup_env_in_list("TERM", options.setenv,
  	    options.num_setenv)) == NULL || *term == '\0')
  		term = getenv("TERM");
 +#ifdef __amigaos__
-+	/* the AmiBash terminal and the Amiga console speak ANSI */
-+	if (term == NULL || *term == '\0')
-+		term = "ansi";
++	/*
++	 * The AmiBash Terminal (it sets TERM_PROGRAM) emulates an xterm; the
++	 * Amiga console understands what the ansi entry uses.
++	 */
++	if (term == NULL || *term == '\0') {
++		const char *prog = getenv("TERM_PROGRAM");
++
++		term = prog != NULL && strcmp(prog, "AmiBash") == 0 ?
++		    "xterm-256color" : "ansi";
++	}
 +#endif
  	client_session2_setup(ssh, id, tty_flag,
  	    options.session_type == SESSION_TYPE_SUBSYSTEM, term,

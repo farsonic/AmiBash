@@ -25,6 +25,11 @@ int ppoll(struct pollfd *, nfds_t, const struct timespec *, const sigset_t *);
 int amiga_ioctl(int, unsigned long, ...);
 #define ioctl amiga_ioctl
 
+/* the Amiga console's keys as a Unix host knows them: port-amiga-io.c */
+#include <unistd.h>		/* read() itself stays declared */
+ssize_t amiga_read(int, void *, size_t);
+#define read(fd, buf, n) amiga_read(fd, buf, n)
+
 /* O_NONBLOCK on sockets; libnix's fcntl() fails there: port-amiga-io.c */
 int amiga_fcntl(int, int, ...);
 #define fcntl amiga_fcntl

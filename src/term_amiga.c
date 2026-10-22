@@ -97,6 +97,12 @@ typedef struct Tab {
     UBYTE last;                  /* last character shown, for CSI b    */
     UWORD attr;
     int cursor_on;
+    int top, bot;                /* scroll region (CSI r); bot 0: all  */
+    int appcur;                  /* cursor keys send ESC O x (?1h)     */
+    int insert;                  /* insert mode (CSI 4 h)              */
+    UBYTE *alt_ch;               /* the main screen while the          */
+    UWORD *alt_at;               /*   alternate one is on (?1049h)     */
+    int alt_on, alt_cx, alt_cy;
     /* escape parser */
     int esc;                     /* 0 none, 1 ESC, 2 CSI, 3 OSC, 4 the
                                     character set of ESC ( and friends */
@@ -742,7 +748,7 @@ static void scroll_up(Tab *t, int n)
     int k;
     if (n <= 0) return;
     if (n > rows) n = rows;
-    for (k = 0; k < n; k++) hist_push(t, k);
+    if (!t->alt_on) for (k = 0; k < n; k++) hist_push(t, k);
     memmove(t->ch, t->ch + n * cols, (rows - n) * cols);
     memmove(t->at, t->at + n * cols, (rows - n) * cols * sizeof(UWORD));
     clear_cells(t, (rows - n) * cols, rows * cols);
@@ -765,17 +771,45 @@ static void scroll_up(Tab *t, int n)
     }
 }
 
+static void move_region(Tab *t, int y, int bot, int n, int ins);
+
+/* the scroll region: lines top..bot */
+static int reg_bot(Tab *t)
+{
+    return t->bot > 0 && t->bot < rows ? t->bot : rows - 1;
+}
+
+static int reg_top(Tab *t)
+{
+    return t->top < reg_bot(t) ? t->top : 0;
+}
+
+/* scroll the region up n lines (the whole screen: into the scrollback) */
+static void region_up(Tab *t, int n)
+{
+    if (reg_top(t) == 0 && reg_bot(t) == rows - 1) scroll_up(t, n);
+    else move_region(t, reg_top(t), reg_bot(t), n, 0);
+}
+
 static void newline(Tab *t)
 {
     t->cx = 0;
     t->wrap = 0;
-    if (t->cy + 1 >= rows) scroll_up(t, 1);
-    else t->cy++;
+    if (t->cy == reg_bot(t)) region_up(t, 1);
+    else if (t->cy + 1 < rows) t->cy++;
 }
 
 static void put_char(Tab *t, UBYTE c)
 {
     if (t->wrap) newline(t);
+    if (t->insert) {
+        int k, y = t->cy;
+        for (k = cols - 1; k > t->cx; k--) {
+            t->ch[y * cols + k] = t->ch[y * cols + k - 1];
+            t->at[y * cols + k] = t->at[y * cols + k - 1];
+        }
+        draw_run(t, y, t->cx + 1, cols);
+    }
     t->ch[t->cy * cols + t->cx] = c;
     t->at[t->cy * cols + t->cx] = t->attr;
     t->last = c;
@@ -800,11 +834,29 @@ static int par(Tab *t, int i, int def)
             }
             return v < 0 ? def : v;
         }
-        while (*p && *p != ';') p++;
+        while (*p && *p != ';' && *p != ':') p++;
         if (!*p) return def;
         p++;
         k++;
     }
+}
+
+/* one of the 8 colours for an xterm 256-colour index or an RGB value */
+static int near8(int r, int g, int b)
+{
+    return (r >= 128 ? 1 : 0) | (g >= 128 ? 2 : 0) | (b >= 128 ? 4 : 0);
+}
+
+static int col256(int v)
+{
+    static const UBYTE cube[6] = {0, 95, 135, 175, 215, 255};
+    if (v < 8) return v;
+    if (v < 16) return v - 8;
+    if (v < 232) {
+        v -= 16;
+        return near8(cube[v / 36], cube[(v / 6) % 6], cube[v % 6]);
+    }
+    return v < 244 ? 0 : 7;              /* the grey ramp */
 }
 
 static void sgr(Tab *t)
@@ -812,9 +864,23 @@ static void sgr(Tab *t)
     int i, n = 1;
     const char *p;
     for (p = t->eb; *p; p++)
-        if (*p == ';') n++;
+        if (*p == ';' || *p == ':') n++;
     for (i = 0; i < n; i++) {
         int v = par(t, i, 0);
+        if (v == 38 || v == 48) {
+            /* 38;5;n or 38;2;r;g;b (and 48 for the background) */
+            int c = -1, m = par(t, i + 1, 0);
+            if (m == 5) {
+                c = col256(par(t, i + 2, 0));
+                i += 2;
+            } else if (m == 2) {
+                c = near8(par(t, i + 2, 0), par(t, i + 3, 0), par(t, i + 4, 0));
+                i += 4;
+            }
+            if (c >= 0 && v == 38) t->attr = (UWORD)((t->attr & ~(7 | A_DEFFG)) | c);
+            else if (c >= 0) t->attr = (UWORD)((t->attr & ~(0x38 | A_DEFBG)) | (c << 3));
+            continue;
+        }
         if (v == 0) t->attr = def_attr;
         else if (v == 1) t->attr |= A_BOLD;
         else if (v == 3) t->attr |= A_ITAL;
@@ -829,6 +895,7 @@ static void sgr(Tab *t)
         else if (v >= 40 && v <= 47) t->attr = (UWORD)((t->attr & ~(0x38 | A_DEFBG)) | ((v - 40) << 3));
         else if (v == 49) t->attr = (UWORD)((t->attr & ~0x38) | A_DEFBG);
         else if (v >= 90 && v <= 97) t->attr = (UWORD)((t->attr & ~(7 | A_DEFFG)) | (v - 90)) | A_BOLD;
+        else if (v >= 100 && v <= 107) t->attr = (UWORD)((t->attr & ~(0x38 | A_DEFBG)) | ((v - 100) << 3));
     }
 }
 
@@ -840,22 +907,72 @@ static void erase(Tab *t, int from, int to)
     for (y = from / cols; y <= (to - 1) / cols; y++) draw_run(t, y, 0, cols);
 }
 
-/* insert (ins) or delete n lines at line y, moving the ones below */
-static void move_lines(Tab *t, int y, int n, int ins)
+/* insert (ins) or delete n lines at line y, moving lines y..bot */
+static void move_region(Tab *t, int y, int bot, int n, int ins)
 {
-    int k;
-    if (n > rows - y) n = rows - y;
+    int k, end = bot + 1;
+    if (y < 0 || y >= end) return;
+    if (n > end - y) n = end - y;
     if (n <= 0) return;
     if (!ins) {
-        memmove(t->ch + y * cols, t->ch + (y + n) * cols, (rows - y - n) * cols);
-        memmove(t->at + y * cols, t->at + (y + n) * cols, (rows - y - n) * cols * sizeof(UWORD));
-        clear_cells(t, (rows - n) * cols, rows * cols);
+        memmove(t->ch + y * cols, t->ch + (y + n) * cols, (end - y - n) * cols);
+        memmove(t->at + y * cols, t->at + (y + n) * cols, (end - y - n) * cols * sizeof(UWORD));
+        clear_cells(t, (end - n) * cols, end * cols);
     } else {
-        memmove(t->ch + (y + n) * cols, t->ch + y * cols, (rows - y - n) * cols);
-        memmove(t->at + (y + n) * cols, t->at + y * cols, (rows - y - n) * cols * sizeof(UWORD));
+        memmove(t->ch + (y + n) * cols, t->ch + y * cols, (end - y - n) * cols);
+        memmove(t->at + (y + n) * cols, t->at + y * cols, (end - y - n) * cols * sizeof(UWORD));
         clear_cells(t, y * cols, (y + n) * cols);
     }
-    for (k = y; k < rows; k++) draw_run(t, k, 0, cols);
+    for (k = y; k < end; k++) draw_run(t, k, 0, cols);
+}
+
+/* the alternate screen (?1049h): the main one is kept until ?1049l */
+static void alt_screen(Tab *t, int on)
+{
+    if (on && !t->alt_on) {
+        t->alt_ch = AllocVec(rows * cols, MEMF_PUBLIC);
+        t->alt_at = AllocVec(rows * cols * sizeof(UWORD), MEMF_PUBLIC);
+        if (t->alt_ch && t->alt_at) {
+            memcpy(t->alt_ch, t->ch, rows * cols);
+            memcpy(t->alt_at, t->at, rows * cols * sizeof(UWORD));
+        }
+        t->alt_cx = t->cx;
+        t->alt_cy = t->cy;
+        t->alt_on = 1;
+        erase(t, 0, rows * cols);
+    } else if (!on && t->alt_on) {
+        if (t->alt_ch && t->alt_at) {
+            int y;
+            memcpy(t->ch, t->alt_ch, rows * cols);
+            memcpy(t->at, t->alt_at, rows * cols * sizeof(UWORD));
+            for (y = 0; y < rows; y++) draw_run(t, y, 0, cols);
+            t->cx = t->alt_cx;
+            t->cy = t->alt_cy;
+        } else
+            erase(t, 0, rows * cols);
+        if (t->alt_ch) FreeVec(t->alt_ch);
+        if (t->alt_at) FreeVec(t->alt_at);
+        t->alt_ch = NULL;
+        t->alt_at = NULL;
+        t->alt_on = 0;
+    }
+}
+
+/* DEC private modes and ANSI modes (CSI ? n h / l, CSI n h / l) */
+static void set_mode(Tab *t, int on)
+{
+    int i, n = 1, priv = t->eb[0] == '?';
+    const char *p;
+    for (p = t->eb; *p; p++)
+        if (*p == ';') n++;
+    for (i = 0; i < n; i++) {
+        int m = par(t, i, 0);
+        if (!priv) {
+            if (m == 4) t->insert = on;
+        } else if (m == 1) t->appcur = on;
+        else if (m == 25) t->cursor_on = on;
+        else if (m == 47 || m == 1047 || m == 1049) alt_screen(t, on);
+    }
 }
 
 static void csi(Tab *t, char final)
@@ -914,10 +1031,30 @@ static void csi(Tab *t, char final)
         draw_run(t, y, x, cols);
         break;
     }
-    case 'L': move_lines(t, t->cy, n, 1); break;   /* insert lines */
-    case 'M': move_lines(t, t->cy, n, 0); break;   /* delete lines */
-    case 'S': scroll_up(t, n); break;
-    case 'T': move_lines(t, 0, n, 1); break;       /* scroll down */
+    case 'L':                            /* insert lines */
+    case 'M':                            /* delete lines */
+        if (t->cy >= reg_top(t) && t->cy <= reg_bot(t))
+            move_region(t, t->cy, reg_bot(t), n, final == 'L');
+        t->cx = 0;
+        break;
+    case 'S': region_up(t, n); break;
+    case 'T': move_region(t, reg_top(t), reg_bot(t), n, 1); break;  /* scroll down */
+    case 'r': {                          /* scroll region */
+        int a = par(t, 0, 1) - 1, b = par(t, 1, rows) - 1;
+        if (b >= rows) b = rows - 1;
+        if (a < b) {
+            t->top = a;
+            t->bot = b;
+        } else {
+            t->top = 0;
+            t->bot = 0;
+        }
+        t->cx = t->cy = 0;
+        break;
+    }
+    case 'c':                            /* device attributes: a VT100 */
+        if (t->eb[0] != '>' && par(t, 0, 0) == 0) queue_input(t, "\033[?1;2c", 7);
+        break;
     case 'X': {                          /* erase chars */
         int x = t->cx < cols ? t->cx : cols - 1;
         if (n > cols - x) n = cols - x;
@@ -957,7 +1094,7 @@ static void csi(Tab *t, char final)
         break;
     case 'h':
     case 'l':
-        if (strcmp(t->eb, "?25") == 0) t->cursor_on = final == 'h';
+        set_mode(t, final == 'h');
         break;
     default:
         break;
@@ -997,6 +1134,9 @@ static void term_write(Tab *t, const UBYTE *s, long n)
                 t->eb[0] = 0;
             } else {
                 if (c == 'c') {                  /* reset */
+                    alt_screen(t, 0);
+                    t->top = t->bot = 0;
+                    t->appcur = t->insert = 0;
                     t->attr = def_attr;
                     erase(t, 0, rows * cols);
                     t->cx = t->cy = 0;
@@ -1011,8 +1151,8 @@ static void term_write(Tab *t, const UBYTE *s, long n)
                 } else if (c == 'E') {
                     newline(t);
                 } else if (c == 'M') {           /* reverse index */
-                    if (t->cy > 0) t->cy--;
-                    else move_lines(t, 0, 1, 1);
+                    if (t->cy == reg_top(t)) move_region(t, reg_top(t), reg_bot(t), 1, 1);
+                    else if (t->cy > 0) t->cy--;
                     t->wrap = 0;
                 } else if (c == '(' || c == ')' || c == '*' || c == '+') {
                     t->esc = 4;                  /* skip the character set */
@@ -1499,6 +1639,8 @@ static int new_tab_with(Profile *prof)
         DeleteMsgPort(t->port);
         if (t->ch) FreeVec(t->ch);
         if (t->at) FreeVec(t->at);
+        if (t->alt_ch) FreeVec(t->alt_ch);
+        if (t->alt_at) FreeVec(t->alt_at);
         t->used = 0;
         return -1;
     }
@@ -1581,6 +1723,10 @@ static void tab_free(Tab *t)
     }
     if (t->ch) FreeVec(t->ch);
     if (t->at) FreeVec(t->at);
+    if (t->alt_ch) FreeVec(t->alt_ch);
+    if (t->alt_at) FreeVec(t->alt_at);
+    t->alt_ch = NULL;
+    t->alt_at = NULL;
     if (t->hch) FreeVec(t->hch);
     if (t->hat) FreeVec(t->hat);
     if (t->paste) FreeVec(t->paste);
@@ -1725,6 +1871,15 @@ static void key_event(struct IntuiMessage *im)
     if (n == 1 && (buf[0] == 4 || buf[0] == 5 || buf[0] == 6) && (q & IEQUALIFIER_CONTROL) == 0) {
         /* nothing special */
     }
+    if (t->raw && t->appcur && n == 2 && (UBYTE)buf[0] == 0x9b && buf[1] >= 'A' && buf[1] <= 'D') {
+        /* the program asked for application cursor keys (CSI ? 1 h) */
+        char k[3];
+        k[0] = 27;
+        k[1] = 'O';
+        k[2] = buf[1];
+        queue_input(t, k, 3);
+        return;
+    }
     if (t->raw) queue_input(t, buf, n);
     else cooked_key(t, buf, n);
 }
@@ -1776,6 +1931,11 @@ static void layout(void)
             FreeVec(t->at);
             t->ch = nc;
             t->at = na;
+            if (t->alt_ch) FreeVec(t->alt_ch);
+            if (t->alt_at) FreeVec(t->alt_at);
+            t->alt_ch = NULL;
+            t->alt_at = NULL;
+            t->top = t->bot = 0;
             t->cy -= shift;
             if (t->cx >= ncols) t->cx = ncols - 1;
         }

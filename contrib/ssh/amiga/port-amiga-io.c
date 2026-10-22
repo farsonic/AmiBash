@@ -9,6 +9,8 @@
  *   tcsetattr()	versions only hide the echo
  *   ioctl()		TIOCGWINSZ asks the console for its size
  *   readpassphrase()	reads a password from the console without echo
+ *   read()		in raw mode, turns the Amiga console's keys (CSI
+ *			sequences, Del) into what a Unix host expects
  *
  * It uses libnix's headers rather than OpenSSH's.  config_fix.sh copies it
  * to openbsd-compat/.
@@ -37,6 +39,7 @@
 
 #undef ioctl
 int ioctl(int, unsigned long, ...);
+#undef read
 #undef fcntl
 
 /* flags of readpassphrase(), as in openbsd-compat/readpassphrase.h */
@@ -68,6 +71,10 @@ static struct MsgPort *wport;
 static struct StandardPacket *wpkt;
 static BPTR wfh;			/* sent to this console, or 0 */
 static int wready;			/* its reply said: a key is waiting */
+
+/* keys translated by amiga_read() and not handed out yet */
+static unsigned char kpend[1024];
+static int kplen, kppos;
 
 static void
 wait_done(void)
@@ -150,7 +157,7 @@ poll(struct pollfd *fds, nfds_t nfds, int timeout)
 				maxs = sfd->lx_sock;
 		} else if ((p->events & POLLIN) && (con = con_of(p->fd)) != 0) {
 			wait_check();
-			if (wready)
+			if (wready || kppos < kplen)
 				p->revents |= POLLIN;
 		} else {
 			/* files, pipes and NIL: never keep anyone waiting */
@@ -294,6 +301,88 @@ tcsetattr(int fd, int how, const struct termios *t)
 		SetMode(con, raw ? 1 : 0);
 	con_tio = *t;
 	return 0;
+}
+
+/*
+ * Keys.  An Amiga console sends CSI (0x9b) sequences for the cursor and
+ * function keys, and 0x7f for Del; a Unix host expects ESC [ sequences
+ * and ESC [ 3 ~.  In raw mode, which an ssh session uses, read() from a
+ * console translates them.  Cursor keys in application mode (ESC O A)
+ * come from the AmiBash Terminal as they are.
+ */
+static const char *const keys[][2] = {
+	{ "A", "\033[A" }, { "B", "\033[B" }, { "C", "\033[C" }, { "D", "\033[D" },
+	{ " A", "\033[1;2D" }, { " @", "\033[1;2C" },	/* Shift-Left, -Right */
+	{ "T", "\033[1;2A" }, { "S", "\033[1;2B" },	/* Shift-Up, -Down */
+	{ "0~", "\033OP" }, { "1~", "\033OQ" }, { "2~", "\033OR" }, { "3~", "\033OS" },
+	{ "4~", "\033[15~" }, { "5~", "\033[17~" }, { "6~", "\033[18~" },
+	{ "7~", "\033[19~" }, { "8~", "\033[20~" }, { "9~", "\033[21~" },
+	{ "10~", "\033[1;2P" }, { "11~", "\033[1;2Q" }, { "12~", "\033[1;2R" },
+	{ "13~", "\033[1;2S" }, { "14~", "\033[15;2~" }, { "15~", "\033[17;2~" },
+	{ "16~", "\033[18;2~" }, { "17~", "\033[19;2~" }, { "18~", "\033[20;2~" },
+	{ "19~", "\033[21;2~" }, { "20~", "\033[23~" }, { "21~", "\033[24~" },
+	{ "?~", "\033[28~" },				/* Help */
+	{ "40~", "\033[2~" }, { "41~", "\033[5~" }, { "42~", "\033[6~" },	/* PC keys */
+	{ "44~", "\033[H" }, { "45~", "\033[F" },
+};
+
+static void
+kput(const char *s, size_t len)
+{
+	if (kplen + len <= sizeof(kpend)) {
+		memcpy(kpend + kplen, s, len);
+		kplen += len;
+	}
+}
+
+ssize_t
+amiga_read(int fd, void *buf, size_t n)
+{
+	unsigned char in[128];
+	ssize_t got;
+	int i, j;
+	size_t k;
+
+	if ((con_tio.c_lflag & ICANON) || con_of(fd) == 0)
+		return read(fd, buf, n);
+	if (kppos >= kplen) {
+		kppos = kplen = 0;
+		if ((got = read(fd, in, sizeof(in))) <= 0)
+			return got;
+		for (i = 0; i < got; i++) {
+			if (in[i] == 0x7f) {
+				kput("\033[3~", 4);
+				continue;
+			}
+			if (in[i] != 0x9b) {
+				kput((char *)&in[i], 1);
+				continue;
+			}
+			/* CSI: parameters, then a final byte in 0x40..0x7e */
+			for (j = i + 1; j < got && !(in[j] >= 0x40 && in[j] <= 0x7e); j++)
+				;
+			if (j >= got) {			/* incomplete: as ESC [ */
+				kput("\033[", 2);
+				continue;
+			}
+			for (k = 0; k < sizeof(keys) / sizeof(keys[0]); k++)
+				if (strlen(keys[k][0]) == (size_t)(j - i) &&
+				    memcmp(keys[k][0], in + i + 1, j - i) == 0)
+					break;
+			if (k < sizeof(keys) / sizeof(keys[0]))
+				kput(keys[k][1], strlen(keys[k][1]));
+			else {				/* anything else: ESC [ ... */
+				kput("\033[", 2);
+				kput((char *)in + i + 1, j - i);
+			}
+			i = j;
+		}
+	}
+	if (n > (size_t)(kplen - kppos))
+		n = kplen - kppos;
+	memcpy(buf, kpend + kppos, n);
+	kppos += n;
+	return n;
 }
 
 /*

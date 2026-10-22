@@ -262,8 +262,10 @@ ssh-keygen -t ed25519          # $HOME/.ssh/id_ed25519
 
 * **Files:** `~/.ssh` is `$HOME/.ssh`, which is `SYS:.ssh` unless `HOME` is
   set. System-wide `ssh_config` and `ssh_known_hosts` go in `ENVARC:ssh`.
-* **Terminal:** the remote side gets `TERM=ansi`. Full-screen programs such
-  as `less` work in the AmiBash Terminal.
+* **Terminal:** in the AmiBash Terminal the remote side gets
+  `TERM=xterm-256color`: colour prompts and `ls`, Vim, `less` and the like
+  work, and the Amiga's cursor, function and Del keys arrive as a Unix host
+  expects them. In a plain console window it's `TERM=ansi`.
 * **Not supported:** whatever needs `fork()`, namely ProxyCommand,
   ControlMaster, `-f`, ssh-agent and X11 forwarding, as well as `scp`/`sftp`.
 
