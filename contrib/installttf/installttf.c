@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include "charsets.h"
 
-static const char version[] = "$VER: InstallTTF 1.2 (21.10.2026)";
+static const char version[] = "$VER: InstallTTF 1.3 (22.10.2026)";
 
 struct Library *DiskfontBase;
 struct GfxBase *GfxBase;
@@ -508,6 +508,12 @@ static int install(const char *path, ULONG face, struct Opts *o, ULONG *nfaces)
     return 1;
 }
 
+static int font_suffix_ok(const char *n)
+{
+    size_t l = strlen(n);
+    return l > 4 && (!Stricmp(n + l - 4, ".ttf") || !Stricmp(n + l - 4, ".otf") || !Stricmp(n + l - 4, ".ttc"));
+}
+
 /* ---- METRICS: what diskfont makes of an installed font, and what AAText
  * will do with it ---------------------------------------------------------- */
 
@@ -573,6 +579,18 @@ static int metrics(const char *fontname)
     int size;
     sprintf(name, "%.110s", fontname);
     if (strlen(name) > 5 && !Stricmp(name + strlen(name) - 5, ".font")) name[strlen(name) - 5] = 0;
+    if (font_suffix_ok(name)) {
+        /* a font file: the name it is installed under, as install() makes it */
+        if (!font_open(&f, fontname, 0) || !font_info(&f)) {
+            font_close(&f);
+            Printf((STRPTR)"%s: not a TrueType or OpenType font InstallTTF can read\n", (ULONG)fontname);
+            return 0;
+        }
+        font_close(&f);
+        if (f.style[0]) sprintf(name, "%.80s %.29s", f.family, f.style);
+        else sprintf(name, "%.110s", f.family);
+        clean_name(name);
+    }
     sprintf(otag, "FONTS:%s.otag", name);
     path[0] = 0;
     if ((fh = Open((STRPTR)otag, MODE_OLDFILE)) != 0) {
