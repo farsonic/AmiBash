@@ -239,7 +239,7 @@ made resident: `Resident C:bash PURE`. (A 1 MB Amiga has room for one tab;
   in a terminal does. There, **F1** or `bashwin` opens another Bash console
   window and **F2** or `bashwin -n` brings the next one to the front. To make
   bash the default, add `bash` at the end of `S:Shell-Startup`.
-* `uname -a` names the build, e.g. `AmigaOS amiga 3.2 AmiBash 0.9.3 (68020
+* `uname -a` names the build, e.g. `AmigaOS amiga 3.2 AmiBash 0.1 (68020
   build) 21.10.2026 m68k 68030 Amiga AmigaOS`: Kickstart release, AmiBash
   version and build, CPU. `bash --version` and `$BASH_VERSION` too.
 

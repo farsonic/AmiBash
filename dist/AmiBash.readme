@@ -2,7 +2,7 @@ Short:        Bash-compatible shell for AmigaOS (no ixemul)
 Author:       AmiBash contributors
 Uploader:     farsonic@gmail.com
 Type:         util/shell
-Version:      0.9.3
+Version:      0.1
 Architecture: m68k-amigaos >= 2.0.4; m68k-aros
 Distribution: Aminet
 License:      GPL-3.0-or-later
