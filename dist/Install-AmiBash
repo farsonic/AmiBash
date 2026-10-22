@@ -30,8 +30,8 @@
   (askoptions
     (prompt "Which parts of AmiBash should be installed?")
     (help
-      "bash in C: - the shell itself; it is also the terminal (bash --term, or "
-      "double-click its icon).\n\n"
+      "bash and top in C: - the shell itself; it is also the terminal (bash --term, or "
+      "double-click its icon). top shows the tasks using the CPU, and memory.\n\n"
       "S:bashrc - an example settings file read by every new bash.\n\n"
       "AmiBashMono fonts - sharp bitmap fonts in every size, used by the "
       "terminal on AGA/ECS screens.\n\n"
@@ -50,7 +50,7 @@
       "Resident - loads bash once at startup (S:User-Startup), so every bash "
       "and terminal tab shares one copy in memory and starts at once.")
     (choices
-      "bash in C:"
+      "bash and top in C:"
       "Example settings file S:bashrc"
       "AmiBashMono fonts in FONTS:"
       "InstallTTF in C:"
@@ -62,13 +62,21 @@
 
 ; ---- bash --------------------------------------------------------------
 (if (in #opts 0)
-  (copyfiles
-    (prompt "Copying bash to C:")
-    (help @copyfiles-help)
-    (source (tackon #here #bin))
-    (dest "C:")
-    (newname "bash")
-    (nogauge)))
+  (
+    (copyfiles
+      (prompt "Copying bash to C:")
+      (help @copyfiles-help)
+      (source (tackon #here #bin))
+      (dest "C:")
+      (newname "bash")
+      (nogauge))
+    (copyfiles
+      (prompt "Copying top to C:")
+      (help @copyfiles-help)
+      (source (tackon #here "top"))
+      (dest "C:")
+      (nogauge))
+  ))
 
 ; ---- S:bashrc --------------------------------------------------------
 (if (in #opts 1)

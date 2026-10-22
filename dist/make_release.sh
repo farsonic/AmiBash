@@ -6,6 +6,7 @@ set -e
 cd "$(dirname "$0")/.."
 make pure pure020
 make -C contrib/installttf
+make -C contrib/top
 make -C contrib/ssh
 V=$(sed -n 's/^#define AMIBASH_SHORTVER "\(.*\)"/\1/p' src/sh.h)
 R=$(mktemp -d)
@@ -13,7 +14,7 @@ mkdir -p "$R/AmiBash/S" "$R/AmiBash/src" "$R/AmiBash/tools"
 cp build/bash.pure "$R/AmiBash/bash"
 cp build/bash020.pure "$R/AmiBash/bash020"
 cp dist/bash.info "$R/AmiBash/"
-cp contrib/installttf/InstallTTF "$R/AmiBash/"
+cp contrib/installttf/InstallTTF contrib/top/top "$R/AmiBash/"
 mkdir -p "$R/AmiBash/SSH"
 cp contrib/ssh/ssh contrib/ssh/ssh-keygen contrib/ssh/ssh-copy-id "$R/AmiBash/SSH/"
 cp contrib/ssh/README.md "$R/AmiBash/SSH/ssh.readme"

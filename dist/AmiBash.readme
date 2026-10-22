@@ -31,6 +31,10 @@ the AmiBashMono bitmap fonts.
 The program is pure (re-entrant), so the tabs share one copy of the code,
 and it can be made resident.
 
+top shows the tasks using the CPU (each task's share, measured with
+exec's task-switch hooks), and memory, in a Shell window or the AmiBash
+Terminal.
+
 The SSH drawer has ssh and ssh-keygen from OpenSSH 10.6p1 (no OpenSSL:
 ed25519 keys, curve25519 and post-quantum key exchange, ChaCha20 and
 AES), for a 68020 or better with a TCP/IP stack (Roadshow, AmiTCP, Miami
