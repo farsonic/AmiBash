@@ -34,7 +34,8 @@ and it can be made resident.
 The SSH drawer has ssh and ssh-keygen from OpenSSH 10.6p1 (no OpenSSL:
 ed25519 keys, curve25519 and post-quantum key exchange, ChaCha20 and
 AES), for a 68020 or better with a TCP/IP stack (Roadshow, AmiTCP, Miami
-or Genesis).  "ssh user@host" in the AmiBash Terminal gives a remote
+or Genesis), and an ssh-copy-id script for AmiBash that puts your key
+on a server.  "ssh user@host" in the AmiBash Terminal gives a remote
 shell (TERM=xterm-256color: colours, Vim, less and the cursor keys
 work); keys and known hosts live in $HOME/.ssh (SYS:.ssh by default).
 
@@ -45,7 +46,7 @@ Install:  double-click Install-AmiBash (Amiga Installer), or by hand:
           Copy bash TO C:        (or bash020 AS C:bash on 68020+)
           Copy S/bashrc TO S:    (optional)
           Copy Fonts/#? TO FONTS: ALL   (terminal font)
-          Copy SSH/ssh SSH/ssh-keygen TO C:   (68020+, optional)
+          Copy SSH/#? TO C:   (ssh, 68020+, optional)
           then type "bash" in a Shell window, or "bash --term"
           (Workbench: copy bash and bash.info to a drawer).
 

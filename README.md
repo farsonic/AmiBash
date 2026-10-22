@@ -248,7 +248,9 @@ made resident: `Resident C:bash PURE`. (A 1 MB Amiga has room for one tab;
 
 The archive's `SSH` drawer has **ssh** and **ssh-keygen** from OpenSSH 10.6p1,
 the client and key generator, for a 68020 or better with a TCP/IP stack
-(Roadshow, AmiTCP, Miami or Genesis). They're built without OpenSSL:
+(Roadshow, AmiTCP, Miami or Genesis). Next to them is **ssh-copy-id**, a bash
+script run by AmiBash that puts your public key on a server. The OpenSSH
+programs are built without OpenSSL:
 
 * **Algorithms:** ed25519 keys; curve25519 and the post-quantum sntrup761
   and ML-KEM key exchanges; ChaCha20-Poly1305 and AES-CTR. That covers any
@@ -258,6 +260,7 @@ the client and key generator, for a 68020 or better with a TCP/IP stack
 ssh user@host                  # interactive, best in the AmiBash Terminal
 ssh user@host 'df -h'          # a command
 ssh-keygen -t ed25519          # $HOME/.ssh/id_ed25519
+ssh-copy-id user@host          # put that key on the server, then no password
 ```
 
 * **Files:** `~/.ssh` is `$HOME/.ssh`, which is `SYS:.ssh` unless `HOME` is

@@ -1,0 +1,81 @@
+#!/bin/bash
+# ssh-copy-id - put your public key in ~/.ssh/authorized_keys on a server,
+# so that ssh logs in with the key instead of a password.  For AmiBash.
+#
+#   ssh-copy-id [-n] [-i keyfile] [-p port] [-o ssh_option] [user@]host
+
+usage() {
+    echo "usage: ssh-copy-id [-n] [-i keyfile] [-p port] [-o ssh_option] [user@]host" >&2
+    exit 1
+}
+
+key=
+dry=
+opts=()
+while [ $# -gt 0 ]; do
+    case $1 in
+    -i) [ $# -ge 2 ] || usage; key=$2; shift 2 ;;
+    -i?*) key=${1#-i}; shift ;;
+    -p) [ $# -ge 2 ] || usage; opts+=(-p "$2"); shift 2 ;;
+    -o) [ $# -ge 2 ] || usage; opts+=(-o "$2"); shift 2 ;;
+    -n) dry=1; shift ;;
+    --) shift; break ;;
+    -*) usage ;;
+    *) break ;;
+    esac
+done
+[ $# -eq 1 ] || usage
+host=$1
+
+# the key: -i, else the first of $HOME/.ssh/id_*.pub (SYS:.ssh without HOME)
+home=${HOME:-SYS:}
+case $home in
+*: | */) ;;
+*) home=$home/ ;;
+esac
+if [ -z "$key" ]; then
+    for k in id_ed25519 id_ecdsa id_rsa; do
+        if [ -f "${home}.ssh/$k.pub" ]; then
+            key=${home}.ssh/$k.pub
+            break
+        fi
+    done
+    if [ -z "$key" ]; then
+        echo "ssh-copy-id: no key in ${home}.ssh: make one with ssh-keygen" >&2
+        exit 1
+    fi
+fi
+case $key in
+*.pub) ;;
+*) [ -f "$key.pub" ] && key=$key.pub ;;
+esac
+if [ ! -f "$key" ]; then
+    echo "ssh-copy-id: $key: no such file" >&2
+    exit 1
+fi
+read -r pub < "$key"
+case $pub in
+ssh-* | ecdsa-* | sk-*) ;;
+*)
+    echo "ssh-copy-id: $key doesn't look like a public key" >&2
+    exit 1
+    ;;
+esac
+
+if [ -n "$dry" ]; then
+    echo "ssh-copy-id: would add $key to $host:"
+    echo "$pub"
+    exit 0
+fi
+
+echo "ssh-copy-id: adding $key to $host"
+# run by sh on the server, whatever the login shell is; the key is $1.
+# One line: an AmigaDOS command line, which carries it to ssh, ends at a
+# newline.
+remote='umask 077; d=$HOME/.ssh; f=$d/authorized_keys; mkdir -p "$d" || exit 1;'
+remote+=' if [ -f "$f" ] && grep -qxF "$1" "$f"; then'
+remote+=' echo "ssh-copy-id: the key is already on the server"; exit 0; fi;'
+remote+=' if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then echo >> "$f"; fi;'
+remote+=' echo "$1" >> "$f" && echo "ssh-copy-id: key added to $f"'
+q=${pub//\'/\'\\\'\'}
+ssh "${opts[@]}" "$host" "exec sh -c '$remote' ssh-copy-id '$q'"

@@ -18,7 +18,14 @@ devices that only offer RSA host keys or older key exchanges.
 ssh user@host                     # log in; works best in the AmiBash Terminal
 ssh -p 2222 user@host 'uname -a'  # run a command
 ssh-keygen -t ed25519             # make a key: $HOME/.ssh/id_ed25519
+ssh-copy-id user@host             # put it on the server, once, with the password
 ```
+
+`ssh-copy-id` is a bash script, run by AmiBash. It takes `-i keyfile`,
+`-p port`, `-o option` (passed to `ssh`) and `-n` (only show the key). Without
+`-i` it uses the first of `id_ed25519.pub`, `id_ecdsa.pub` and `id_rsa.pub` in
+`$HOME/.ssh`. On the server it adds the key to `~/.ssh/authorized_keys`
+unless it's already there, using `sh` whatever the login shell is.
 
 * **TCP/IP stack:** `ssh` needs one that provides `bsdsocket.library`: Roadshow (OS 3.2),
   AmiTCP, Miami or Genesis.

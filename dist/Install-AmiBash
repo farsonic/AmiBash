@@ -42,7 +42,8 @@
       "freetype2.library in LIBS:.\n\n"
       "AmiBash Terminal icon - in SYS:Tools, to open the terminal from "
       "Workbench.\n\n"
-      "ssh and ssh-keygen - OpenSSH's client and key generator, in C:. They "
+      "ssh, ssh-keygen and ssh-copy-id - OpenSSH's client, key generator "
+      "and a bash script that puts your key on a server, in C:. They "
       "need a 68020 or better and a TCP/IP stack (Roadshow, AmiTCP, Miami or "
       "Genesis). Keys and known hosts go in $HOME/.ssh, SYS:.ssh unless HOME "
       "is set.\n\n"
@@ -134,7 +135,7 @@
 (if (in #opts 6)
   (if #has020
     (copyfiles (source (tackon #here "SSH")) (dest "C:")
-      (choices "ssh" "ssh-keygen") (nogauge))
+      (choices "ssh" "ssh-keygen" "ssh-copy-id") (nogauge))
     (message "ssh needs a 68020 or better; it was not installed.")))
 
 ; ---- resident ---------------------------------------------------------

@@ -15,7 +15,7 @@ cp build/bash020.pure "$R/AmiBash/bash020"
 cp dist/bash.info "$R/AmiBash/"
 cp contrib/installttf/InstallTTF "$R/AmiBash/"
 mkdir -p "$R/AmiBash/SSH"
-cp contrib/ssh/ssh contrib/ssh/ssh-keygen "$R/AmiBash/SSH/"
+cp contrib/ssh/ssh contrib/ssh/ssh-keygen contrib/ssh/ssh-copy-id "$R/AmiBash/SSH/"
 cp contrib/ssh/README.md "$R/AmiBash/SSH/ssh.readme"
 cp dist/Install-AmiBash "$R/AmiBash/"
 python3 tools/mkicon.py "$R/AmiBash/Install-AmiBash.info" Installer APPNAME=AmiBash MINUSER=AVERAGE >/dev/null
