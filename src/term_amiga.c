@@ -94,10 +94,12 @@ typedef struct Tab {
     UWORD *at;
     int cx, cy, sx, sy;          /* cursor, saved cursor               */
     int wrap;                    /* pending wrap (deferred, like xterm) */
+    UBYTE last;                  /* last character shown, for CSI b    */
     UWORD attr;
     int cursor_on;
     /* escape parser */
-    int esc;                     /* 0 none, 1 ESC, 2 CSI, 3 OSC        */
+    int esc;                     /* 0 none, 1 ESC, 2 CSI, 3 OSC, 4 the
+                                    character set of ESC ( and friends */
     char eb[80];
     int el;
     /* input */
@@ -776,6 +778,7 @@ static void put_char(Tab *t, UBYTE c)
     if (t->wrap) newline(t);
     t->ch[t->cy * cols + t->cx] = c;
     t->at[t->cy * cols + t->cx] = t->attr;
+    t->last = c;
     draw_run(t, t->cy, t->cx, t->cx + 1);
     if (t->cx + 1 >= cols) t->wrap = 1;
     else t->cx++;
@@ -837,6 +840,24 @@ static void erase(Tab *t, int from, int to)
     for (y = from / cols; y <= (to - 1) / cols; y++) draw_run(t, y, 0, cols);
 }
 
+/* insert (ins) or delete n lines at line y, moving the ones below */
+static void move_lines(Tab *t, int y, int n, int ins)
+{
+    int k;
+    if (n > rows - y) n = rows - y;
+    if (n <= 0) return;
+    if (!ins) {
+        memmove(t->ch + y * cols, t->ch + (y + n) * cols, (rows - y - n) * cols);
+        memmove(t->at + y * cols, t->at + (y + n) * cols, (rows - y - n) * cols * sizeof(UWORD));
+        clear_cells(t, (rows - n) * cols, rows * cols);
+    } else {
+        memmove(t->ch + (y + n) * cols, t->ch + y * cols, (rows - y - n) * cols);
+        memmove(t->at + (y + n) * cols, t->at + y * cols, (rows - y - n) * cols * sizeof(UWORD));
+        clear_cells(t, y * cols, (y + n) * cols);
+    }
+    for (k = y; k < rows; k++) draw_run(t, k, 0, cols);
+}
+
 static void csi(Tab *t, char final)
 {
     int n = par(t, 0, 1), i;
@@ -893,23 +914,26 @@ static void csi(Tab *t, char final)
         draw_run(t, y, x, cols);
         break;
     }
-    case 'L':                            /* insert lines */
-    case 'M': {                          /* delete lines */
-        int y = t->cy, k;
-        if (n > rows - y) n = rows - y;
-        if (final == 'M') {
-            memmove(t->ch + y * cols, t->ch + (y + n) * cols, (rows - y - n) * cols);
-            memmove(t->at + y * cols, t->at + (y + n) * cols, (rows - y - n) * cols * sizeof(UWORD));
-            clear_cells(t, (rows - n) * cols, rows * cols);
-        } else {
-            memmove(t->ch + (y + n) * cols, t->ch + y * cols, (rows - y - n) * cols);
-            memmove(t->at + (y + n) * cols, t->at + y * cols, (rows - y - n) * cols * sizeof(UWORD));
-            clear_cells(t, y * cols, (y + n) * cols);
-        }
-        for (k = y; k < rows; k++) draw_run(t, k, 0, cols);
+    case 'L': move_lines(t, t->cy, n, 1); break;   /* insert lines */
+    case 'M': move_lines(t, t->cy, n, 0); break;   /* delete lines */
+    case 'S': scroll_up(t, n); break;
+    case 'T': move_lines(t, 0, n, 1); break;       /* scroll down */
+    case 'X': {                          /* erase chars */
+        int x = t->cx < cols ? t->cx : cols - 1;
+        if (n > cols - x) n = cols - x;
+        erase(t, t->cy * cols + x, t->cy * cols + x + n);
         break;
     }
-    case 'S': scroll_up(t, n); break;
+    case 'b':                            /* repeat the last character */
+        if (n > rows * cols) n = rows * cols;
+        while (n-- > 0) put_char(t, t->last);
+        break;
+    case 'I':                            /* forward tab */
+        while (n-- > 0) t->cx = (t->cx + 8) & ~7;
+        break;
+    case 'Z':                            /* back tab */
+        while (n-- > 0 && t->cx > 0) t->cx = (t->cx - 1) & ~7;
+        break;
     case 'm': sgr(t); break;
     case 's': t->sx = t->cx; t->sy = t->cy; break;
     case 'u': t->cx = t->sx; t->cy = t->sy; break;
@@ -984,6 +1008,15 @@ static void term_write(Tab *t, const UBYTE *s, long n)
                     t->cy = t->sy;
                 } else if (c == 'D') {
                     newline(t);
+                } else if (c == 'E') {
+                    newline(t);
+                } else if (c == 'M') {           /* reverse index */
+                    if (t->cy > 0) t->cy--;
+                    else move_lines(t, 0, 1, 1);
+                    t->wrap = 0;
+                } else if (c == '(' || c == ')' || c == '*' || c == '+') {
+                    t->esc = 4;                  /* skip the character set */
+                    continue;
                 }
                 t->esc = 0;
             }
@@ -998,6 +1031,10 @@ static void term_write(Tab *t, const UBYTE *s, long n)
                 t->eb[t->el++] = (char)c;
                 t->eb[t->el] = 0;
             }
+            continue;
+        }
+        if (t->esc == 4) {
+            t->esc = 0;
             continue;
         }
         if (t->esc == 3) {
