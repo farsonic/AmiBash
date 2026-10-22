@@ -23,14 +23,24 @@ python3 tools/mkicon.py "$R/AmiBash/Install-AmiBash.info" Installer APPNAME=AmiB
 mkdir -p "$R/AmiBash/Icons"
 python3 tools/mkicon.py "$R/AmiBash/Icons/AmiBash Terminal.info" C:bash >/dev/null
 cp -r dist/Fonts "$R/AmiBash/"
-cp tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py "$R/AmiBash/tools/"
+cp tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py tools/mkinfo.py "$R/AmiBash/tools/"
 cp dist/S/bashrc "$R/AmiBash/S/"
 cp README.md LICENSE dist/AmiBash.readme "$R/AmiBash/"
 cp src/*.c src/*.h Makefile "$R/AmiBash/src/"
+# icons, so that Workbench shows everything without "Show all files"
+icon() { python3 tools/mkinfo.py "$@"; }
+icon drawer "$R/AmiBash.info"
+for d in S Fonts Icons SSH tools src; do icon drawer "$R/AmiBash/$d.info"; done
+cp dist/bash.info "$R/AmiBash/bash020.info"
+for f in InstallTTF top SSH/ssh SSH/ssh-keygen; do icon tool "$R/AmiBash/$f.info"; done
+for f in README.md LICENSE AmiBash.readme S/bashrc SSH/ssh.readme SSH/ssh-copy-id \
+         tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py tools/mkinfo.py; do
+    icon doc "$R/AmiBash/$f.info"
+done
 rm -f dist/AmiBash.lha
-(cd "$R" && jlha a "$OLDPWD/dist/AmiBash.lha" AmiBash >/dev/null)
-rm -rf "$R/AmiBash/src"
+(cd "$R" && jlha a "$OLDPWD/dist/AmiBash.lha" AmiBash AmiBash.info >/dev/null)
+rm -rf "$R/AmiBash/src" "$R/AmiBash/src.info"
 rm -f dist/AmiBash-$V-bin.zip
-(cd "$R" && zip -qr "$OLDPWD/dist/AmiBash-$V-bin.zip" AmiBash)
+(cd "$R" && zip -qr "$OLDPWD/dist/AmiBash-$V-bin.zip" AmiBash AmiBash.info)
 rm -r "$R"
 ls -l dist/AmiBash.lha dist/AmiBash-$V-bin.zip
