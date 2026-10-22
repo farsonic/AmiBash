@@ -294,6 +294,8 @@ The full list, as found by the test corpus, is in
 
 You need [vbcc](http://sun.hasenbraten.de/vbcc/) with the m68k-amigaos target,
 vasm, vlink, and the AmigaOS NDK 3.2 headers (Aminet `dev/misc/NDK3.2`).
+[toolchain/README.md](toolchain/README.md) shows how to set them all up on
+Linux, along with the FS-UAE and AROS test setup.
 
 ```
 make pure         # build/bash.pure     (68000, re-entrant: the released bash)
