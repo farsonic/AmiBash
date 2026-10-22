@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include "charsets.h"
 
-static const char version[] = "$VER: InstallTTF 1.3 (22.10.2026)";
+static const char version[] = "$VER: InstallTTF 1.4 (22.10.2026)";
 
 struct Library *DiskfontBase;
 struct GfxBase *GfxBase;
@@ -51,6 +51,7 @@ typedef struct Font {
     UWORD upem, weight;
     int italic, fixed, serif;
     LONG space_adv;                      /* font units */
+    LONG hasc, hdesc;                    /* hhea ascender, -descender */
 } Font;
 
 static int read_at(BPTR fh, ULONG off, void *buf, ULONG len)
@@ -238,6 +239,8 @@ static int font_info(Font *f)
     /* the space's advance from cmap + hmtx */
     if (find_table(f, TAG('h', 'h', 'e', 'a'), &off, &len) && read_at(f->fh, off, b, 36)) {
         UWORD nh = be16(b + 34), g;
+        f->hasc = (WORD)be16(b + 4);
+        f->hdesc = -(LONG)(WORD)be16(b + 6);
         ULONG cl, ho, hl;
         UBYTE *cm = load_table(f, TAG('c', 'm', 'a', 'p'), &cl);
         if (cm) {
@@ -459,7 +462,16 @@ static int install(const char *path, ULONG face, struct Opts *o, ULONG *nfaces)
     /* the space's width as a fraction of the em (16.16): 3.x diskfont makes
      * a fixed-width font's cells this times the pixel height wide, so 1.0
      * gives square cells (AATextManager's "fixed width cells too wide") */
-    ot_val(ot, OT_SpaceFactor, (ULONG)(((ULONG)f.space_adv << 16) / f.upem));
+    {
+        /* The width of a fixed-width font's cells: SpaceFactor times the
+         * pixel height.  With metric 2 the engine fits the hhea ascender +
+         * descender into that height, so the cell must be the advance as a
+         * fraction of that span, not of the em: else the cells are wider
+         * than the letters, and AAText, which sizes its letters to fill
+         * the cells, draws them too big and they are cut off at the top. */
+        LONG span = f.hasc + f.hdesc > 0 ? f.hasc + f.hdesc : f.upem;
+        ot_val(ot, OT_SpaceFactor, f.fixed ? (ULONG)(((ULONG)f.space_adv << 16) / span) : 0x10000);
+    }
     ot_val(ot, OT_InhibitAlgoStyle, f.italic ? 7 : 3);
     ot_val(ot, OT_SpecCount, cs >= 0 ? 5 : 4);
     ot_str(ot, OT_Spec1 | OT_Indirect, fontfile);                        /* the font file */
