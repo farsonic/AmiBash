@@ -132,10 +132,12 @@ scripts see them (`$name` in AmigaDOS, `GetVar()`).
   Ctrl-C interrupts loops and commands. The prompt understands `\u \h \w \W \$
   \t \d \D{fmt} \[ \]` and ANSI colours.
 
-## The AmiBash Terminal (tabs) and Workbench
+## The AmiBash Terminal (tabs, windows) and Workbench
 
-The Amiga console has no tabs, so AmiBash brings its own terminal window: a
-tab bar like macOS Terminal's, each tab running its own bash.
+The Amiga console has no tabs, so AmiBash brings its own terminal: windows
+with a tab bar like macOS Terminal's, each tab running its own bash. Tabs
+can be dragged to another place in the bar, onto another terminal window,
+or out of the window into a window of their own.
 
 ```
  x        bash: Work:        A1 | x       bash: RAM:        A2 | +
@@ -143,7 +145,8 @@ tab bar like macOS Terminal's, each tab running its own bash.
 
 Double-click `bash` on Workbench, or type `bash --term` in a Shell or at a
 bash prompt, to open it (it starts in the background and the Shell gets
-its prompt back; if a terminal is already open you get a new tab).
+its prompt back; if a terminal is already open you get another window of
+it). All the windows are one program, so a tab can move between them.
 If double-clicking gives a plain "Bash" console window instead, the icon
 still has an active `WINDOW=` tool type (as `bash.info` from 0.9.2 did):
 use the new `bash.info`, or put that tool type in brackets.
@@ -154,7 +157,13 @@ use the new `bash.info`, or put that tool type in brackets.
 | **Amiga-W**, click a tab's **x**, or `exit` / Ctrl-D | close the tab (the last one closes the window) |
 | **Amiga-1** … **Amiga-9**, or click a tab | go to that tab |
 | **Amiga-[** / **Amiga-]**, or `bashwin -n` | previous / next tab |
-| **Amiga-Q** or the close gadget | close all tabs and the window |
+| **Amiga-<** / **Amiga->**, or drag a tab along the bar | move the tab left / right |
+| **Amiga-N** or `bash --term` | new window |
+| **Amiga-D**, or drag a tab out of the window | the tab into a window of its own |
+| drag a tab onto another terminal window | the tab into that window (at that place in its bar) |
+| **Amiga-M** | all tabs of all windows into this one |
+| the close gadget | close this window's tabs (and the window) |
+| **Amiga-Q** | close all tabs and windows |
 | **Amiga-+** / **Amiga--** / **Amiga-0** | bigger / smaller text, default size |
 | **Amiga-F** | choose the font (ASL requester, fixed-width fonts) |
 | scroller, mouse wheel, **Shift-Up** / **Shift-Down** | scroll back through earlier output (a page at a time with Shift); typing returns to the bottom |
@@ -162,7 +171,7 @@ use the new `bash.info`, or put that tool type in brackets.
 | **Amiga-C** / **Amiga-V** / **Amiga-A** | copy the selection, paste, select all (the Amiga clipboard) |
 | **Amiga-,** | Preferences: profiles, colours, font, start directory |
 
-The shortcuts work with either Amiga key and are also in the *Terminal*,
+The shortcuts work with either Amiga key and are also in the *AmiBash*,
 *Edit* and *View* menus.
 
 **Selection and the clipboard.** Selected text is copied to the clipboard

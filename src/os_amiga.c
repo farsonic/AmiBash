@@ -1406,12 +1406,12 @@ int os_new_window_only(void)
 }
 
 /* "bash --term" typed in a shell: open the AmiBash Terminal (or a new
- * tab in the one already running) without tying up this shell */
+ * window of the one already running) without tying up this shell */
 int os_open_terminal(void)
 {
     char cmd[300];
     BPTR in, out;
-    LONG r = term_request("new");
+    LONG r = term_request("window");
     if (r != -2) return r == 0 ? 0 : -1;
     find_self();
     in = Open((STRPTR)"NIL:", MODE_OLDFILE);

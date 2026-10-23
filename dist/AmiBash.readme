@@ -18,8 +18,11 @@ lists all volumes and assigns.  Amiga commands run directly with correct
 ReadArgs() quoting, Ctrl-C works, return codes become $?.
 
 Double-click it on Workbench (or type "bash --term") for the AmiBash
-Terminal: a window with tabs, each running its own bash.  Amiga-T or the
+Terminal: windows with tabs, each running its own bash.  Amiga-T or the
 "+" opens a tab, Amiga-W or a tab's "x" closes it, Amiga-1..9 switches.
+Amiga-N (or bash --term again) opens another window; drag a tab along
+the bar to reorder it, onto another window to move it there, or out of
+the window into a window of its own (Amiga-D); Amiga-M merges them all.
 Amiga-+/- zoom the text: the supplied AmiBashMono font (DejaVu Sans Mono
 drawn for every size from 10 to 43 pixels) stays sharp at every step.
 On RTG screens it uses an installed monospaced TrueType font, which

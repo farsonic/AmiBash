@@ -64,7 +64,8 @@ struct Library *AslBase;
 extern struct Library *DiskfontBase;
 struct TextFont *os_load_font(const char *fpath, int size);
 
-#define MAXTABS 9
+#define MAXTABS 24               /* in all windows                     */
+#define MAXWIN 8
 #define INQ 1024                 /* keyboard input queue per tab      */
 #define LINEMAX 256              /* cooked mode line                  */
 
@@ -134,16 +135,33 @@ typedef struct Tab {
     /* text being pasted, fed as the input queue has room */
     char *paste;
     long plen, ppos;
+    /* the window it is in, its place in that window's tab bar, and the
+     * size of its screen (the window's columns and rows) */
+    int wid, pos;
+    int tcols, trows;
 } Tab;
 
 static Tab *tabs;                /* MAXTABS of them                    */
 static int new_tab_with(Profile *p);
+
+/* Several windows: the statics below (win, font, cols, rows, cur, ...)
+ * are those of the current window, curw; switch_win() puts them away in
+ * its WinCtx and takes out another's (see "windows" further down). */
+static int curw = -1;            /* the current window, -1 none        */
+static int actw = -1;            /* the one the user worked in last    */
+static void switch_win(int w);
+static void switch_tab(Tab *t);
+static int open_window(int x, int y);
+static void move_tab(int i, int w);
+static struct Window *win_of(int w);
+static void merge_windows(void);
 
 /* commands: menu items carry them as user data */
 enum {
     CMD_NEWTAB = 1, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
     CMD_COPY, CMD_PASTE, CMD_SELALL,
     CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE, CMD_FONT, CMD_ABOUT, CMD_CHECKUPD,
+    CMD_NEWWIN, CMD_TABLEFT, CMD_TABRIGHT, CMD_DETACH, CMD_MERGE,
     CMD_PROFILE = 100                    /* + n: new tab with the n-th profile */
 };
 #define MAXPROFMENU 16
@@ -661,28 +679,51 @@ static void free_scroller(void)
     sb_prop = sb_up = sb_down = img_size = img_up = img_down = NULL;
 }
 
+/* the visible tabs of the current window, in their order in the bar */
+static int tab_order(int *idx)
+{
+    int i, j, n = 0;
+    for (i = 0; i < MAXTABS; i++)
+        if (tabs[i].used && !tabs[i].hidden && tabs[i].wid == curw) {
+            for (j = n; j > 0 && tabs[idx[j - 1]].pos > tabs[i].pos; j--) idx[j] = idx[j - 1];
+            idx[j] = i;
+            n++;
+        }
+    return n;
+}
+
+/* a place after the others in the current window's bar */
+static int next_pos(void)
+{
+    int i, p = 0;
+    for (i = 0; i < MAXTABS; i++)
+        if (tabs[i].used && tabs[i].wid == curw && tabs[i].pos >= p) p = tabs[i].pos + 1;
+    return p;
+}
+
+static int drag_tab = -1;        /* a tab being dragged (current window) */
+static int drag_x, drag_moved;
+
 static void draw_tabbar(void)
 {
-    int i, n = 0, x = 0, w, k;
-    int W;
+    int i, n, x = 0, w, k, o;
+    int W, order[MAXTABS];
     struct RastPort *rp;
     if (!win) return;
     rp = win->RPort;
     W = win->GZZWidth;
     set_pens(def_attr);
-    for (i = 0; i < MAXTABS; i++)
-        if (tabs[i].used && !tabs[i].hidden) n++;
+    n = tab_order(order);
     plus_w = cw * 3 + 4;
     SetAPen(rp, dri ? dri->dri_Pens[BACKGROUNDPEN] : 0);
     RectFill(rp, 0, 0, W - 1, tabh - 1);
     if (n == 0) return;
     w = tab_width(n);
     k = 0;
-    for (i = 0; i < MAXTABS; i++) {
-        Tab *t = &tabs[i];
+    for (o = 0; o < n; o++) {
+        Tab *t = &tabs[i = order[o]];
         int x0, x1, tw, maxc, len;
         char label[80];
-        if (!t->used || t->hidden) continue;
         k++;
         x0 = x;
         x1 = x + w - 1;
@@ -717,6 +758,12 @@ static void draw_tabbar(void)
         if (len) txt(rp, t->title, len);
         x += w;
     }
+    if (drag_tab >= 0 && drag_moved && drag_x >= 0 && drag_x < n * w) {
+        /* where a dragged tab would go */
+        int at = (drag_x + w / 2) / w * w;
+        SetAPen(rp, pen_hi);
+        RectFill(rp, at > 1 ? at - 2 : 0, 1, at > 1 ? at + 1 : 3, tabh - 1);
+    }
     /* "+" button, right after the last tab */
     SetAPen(rp, dri ? dri->dri_Pens[SHINEPEN] : 2);
     Move(rp, x, tabh - 1);
@@ -731,11 +778,14 @@ static void draw_tabbar(void)
     txt(rp, "+", 1);
 }
 
+static char *win_title(void);
+
 static void update_title(void)
 {
-    static char wt[80];
+    /* Intuition keeps the pointer: each window has its own buffer */
+    char *wt = win_title();
     Tab *t = active();
-    if (!win) return;
+    if (!win || !wt) return;
     strcpy(wt, t ? t->title : "bash");
     SetWindowTitles(win, (UBYTE *)wt, (UBYTE *)"AmiBash Terminal");
 }
@@ -1447,6 +1497,8 @@ static void alloc_cells(Tab *t)
     t->ch = AllocVec(rows * cols, MEMF_PUBLIC);
     t->at = AllocVec(rows * cols * sizeof(UWORD), MEMF_PUBLIC);
     t->attr = def_attr;
+    t->tcols = cols;
+    t->trows = rows;
     if (t->ch && t->at) clear_cells(t, 0, rows * cols);
 }
 
@@ -1468,26 +1520,23 @@ static void select_tab(int i)
     sb_dirty = 1;
 }
 
+static int tab_order(int *idx);
+
 static int visible_index(int k)
 {
-    /* k-th visible tab (0-based) -> slot */
-    int i;
-    for (i = 0; i < MAXTABS; i++)
-        if (tabs[i].used && !tabs[i].hidden && k-- == 0) return i;
-    return -1;
+    /* k-th tab in the current window's bar (0-based) -> slot */
+    int order[MAXTABS], n = tab_order(order);
+    return k >= 0 && k < n ? order[k] : -1;
 }
 
 static void step_tab(int dir)
 {
-    int i, j;
-    if (cur < 0) return;
-    for (j = 1; j <= MAXTABS; j++) {
-        i = (cur + dir * j + MAXTABS * 2) % MAXTABS;
-        if (tabs[i].used && !tabs[i].hidden) {
-            select_tab(i);
-            return;
-        }
-    }
+    int order[MAXTABS], n = tab_order(order), k;
+    if (n == 0) return;
+    for (k = 0; k < n && order[k] != cur; k++) ;
+    if (k == n) k = 0;
+    else k = (k + dir + n) % n;
+    select_tab(order[k]);
 }
 
 /* shell launch request, handled by a helper process */
@@ -1635,6 +1684,8 @@ static int new_tab_with(Profile *prof)
         return -1;
     }
     memset(t, 0, sizeof(*t));
+    t->wid = curw;
+    t->pos = next_pos();
     if (!prof) prof = prof_default();
     t->prof = prof ? prof->id : 0;
     t->sblines = prof && prof->scrollback > 0 ? prof->scrollback : sb_lines;
@@ -1755,14 +1806,6 @@ static void close_tab(int i)
     if (cur == i) {
         cur = -1;
         step_tab(1);
-        if (cur < 0) {
-            int k;
-            for (k = 0; k < MAXTABS; k++)
-                if (tabs[k].used && !tabs[k].hidden) {
-                    select_tab(k);
-                    break;
-                }
-        }
     }
     draw_tabbar();
     if (cur >= 0) redraw_tab(&tabs[cur]);
@@ -1851,10 +1894,11 @@ static void key_event(struct IntuiMessage *im)
     if (q & IEQUALIFIER_LCOMMAND) {
         /* Left-Amiga works like Right-Amiga for the tab shortcuts (it is
          * where Command is on a Mac keyboard under an emulator) */
-        static const char keys[] = "tw[],qcva+-0f?u";
+        static const char keys[] = "tw[],qcva+-0f?undm<>";
         static const UBYTE kcmd[] = {CMD_NEWTAB, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
                                      CMD_COPY, CMD_PASTE, CMD_SELALL, CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE,
-                                     CMD_FONT, CMD_ABOUT, CMD_CHECKUPD};
+                                     CMD_FONT, CMD_ABOUT, CMD_CHECKUPD, CMD_NEWWIN, CMD_DETACH, CMD_MERGE,
+                                     CMD_TABLEFT, CMD_TABRIGHT};
         n = MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL);
         if (n == 1 && buf[0]) {
             const char *k = strchr(keys, buf[0] == '=' ? '+' : (buf[0] >= 'A' && buf[0] <= 'Z') ? buf[0] | 0x20 : buf[0]);
@@ -1896,6 +1940,50 @@ static void key_event(struct IntuiMessage *im)
 /* ------------------------------------------------------------------ */
 /* window / layout                                                      */
 
+/* tab t's screen to ncols x nrows, keeping the part with the cursor;
+ * 0 if there was no memory for it (it keeps its old size then) */
+static int resize_tab(Tab *t, int ncols, int nrows)
+{
+    UBYTE *nc;
+    UWORD *na;
+    int y, x, shift, oc = t->tcols, orow = t->trows;
+    if (!t->ch || (oc == ncols && orow == nrows)) return 1;
+    nc = AllocVec(nrows * ncols, MEMF_PUBLIC);
+    na = AllocVec(nrows * ncols * sizeof(UWORD), MEMF_PUBLIC);
+    if (!nc || !na) {
+        if (nc) FreeVec(nc);
+        if (na) FreeVec(na);
+        return 0;
+    }
+    /* keep the bottom part of the screen that contains the cursor */
+    shift = t->cy >= nrows ? t->cy - nrows + 1 : 0;
+    for (y = 0; y < nrows; y++)
+        for (x = 0; x < ncols; x++) {
+            int oy = y + shift;
+            if (oy < orow && x < oc) {
+                nc[y * ncols + x] = t->ch[oy * oc + x];
+                na[y * ncols + x] = t->at[oy * oc + x];
+            } else {
+                nc[y * ncols + x] = ' ';
+                na[y * ncols + x] = def_attr;
+            }
+        }
+    FreeVec(t->ch);
+    FreeVec(t->at);
+    t->ch = nc;
+    t->at = na;
+    if (t->alt_ch) FreeVec(t->alt_ch);
+    if (t->alt_at) FreeVec(t->alt_at);
+    t->alt_ch = NULL;
+    t->alt_at = NULL;
+    t->top = t->bot = 0;
+    t->cy -= shift;
+    if (t->cx >= ncols) t->cx = ncols - 1;
+    t->tcols = ncols;
+    t->trows = nrows;
+    return 1;
+}
+
 static void layout(void)
 {
     int i, ncols, nrows;
@@ -1910,44 +1998,8 @@ static void layout(void)
     if (ncols < 10) ncols = 10;
     if (nrows < 2) nrows = 2;
     if (ncols != cols || nrows != rows) {
-        for (i = 0; i < MAXTABS; i++) {
-            Tab *t = &tabs[i];
-            UBYTE *nc;
-            UWORD *na;
-            int y, x, shift;
-            if (!t->used || !t->ch) continue;
-            nc = AllocVec(nrows * ncols, MEMF_PUBLIC);
-            na = AllocVec(nrows * ncols * sizeof(UWORD), MEMF_PUBLIC);
-            if (!nc || !na) {
-                if (nc) FreeVec(nc);
-                if (na) FreeVec(na);
-                continue;
-            }
-            /* keep the bottom part of the screen that contains the cursor */
-            shift = t->cy >= nrows ? t->cy - nrows + 1 : 0;
-            for (y = 0; y < nrows; y++)
-                for (x = 0; x < ncols; x++) {
-                    int oy = y + shift;
-                    if (oy < rows && x < cols) {
-                        nc[y * ncols + x] = t->ch[oy * cols + x];
-                        na[y * ncols + x] = t->at[oy * cols + x];
-                    } else {
-                        nc[y * ncols + x] = ' ';
-                        na[y * ncols + x] = def_attr;
-                    }
-                }
-            FreeVec(t->ch);
-            FreeVec(t->at);
-            t->ch = nc;
-            t->at = na;
-            if (t->alt_ch) FreeVec(t->alt_ch);
-            if (t->alt_at) FreeVec(t->alt_at);
-            t->alt_ch = NULL;
-            t->alt_at = NULL;
-            t->top = t->bot = 0;
-            t->cy -= shift;
-            if (t->cx >= ncols) t->cx = ncols - 1;
-        }
+        for (i = 0; i < MAXTABS; i++)
+            if (tabs[i].used && tabs[i].wid == curw) resize_tab(&tabs[i], ncols, nrows);
         cols = ncols;
         rows = nrows;
     }
@@ -2176,23 +2228,107 @@ static void sel_release(void)
 
 static void click(int x, int y)
 {
-    int n = 0, i, w, k = 0;
+    int n, i, w, k, order[MAXTABS];
     if (y >= tabh) return;
-    for (i = 0; i < MAXTABS; i++)
-        if (tabs[i].used && !tabs[i].hidden) n++;
+    n = tab_order(order);
     w = tab_width(n);
     if (n == 0 || (x >= n * w && x < n * w + plus_w)) {
         new_tab();
         return;
     }
-    for (i = 0; i < MAXTABS; i++) {
-        if (!tabs[i].used || tabs[i].hidden) continue;
+    for (k = 0; k < n; k++) {
+        i = order[k];
         if (x >= k * w && x < (k + 1) * w) {
             if (x < k * w + 4 + cw * 2) close_tab(i);    /* the "x" */
-            else select_tab(i);
+            else {
+                select_tab(i);
+                /* the start of a drag: elsewhere in the bar, onto another
+                 * window, or out into a window of its own */
+                drag_tab = i;
+                drag_x = x;
+                drag_moved = 0;
+                ReportMouse(TRUE, win);
+            }
             return;
         }
-        k++;
+    }
+}
+
+/* put tab i at place k in the current window's bar */
+static void reorder_tab(int i, int k)
+{
+    int n, j, m = 0, order[MAXTABS];
+    n = tab_order(order);
+    for (j = 0; j < n; j++) {
+        if (m == k) tabs[i].pos = m++;
+        if (order[j] != i) tabs[order[j]].pos = m++;
+    }
+    if (k >= m) tabs[i].pos = m;
+    draw_tabbar();
+}
+
+/* move the current tab one place left (-1) or right (+1) */
+static void shift_tab(int dir)
+{
+    int n, k, order[MAXTABS];
+    if (cur < 0) return;
+    n = tab_order(order);
+    for (k = 0; k < n && order[k] != cur; k++) ;
+    if (k + dir < 0 || k + dir >= n) return;
+    reorder_tab(cur, k + dir);
+}
+
+/* the mouse button let go after dragging a tab: mx, my in the window */
+static void drop_tab(int mx, int my)
+{
+    int i = drag_tab, n, w, order[MAXTABS];
+    LONG sx, sy;
+    drag_tab = -1;
+    if (i < 0 || !tabs[i].used || tabs[i].hidden || tabs[i].wid != curw) return;
+    n = tab_order(order);
+    w = tab_width(n);
+    if (my >= 0 && my < tabh && mx >= 0 && mx < win->GZZWidth) {
+        if (drag_moved) {
+            /* the gap nearest the pointer, counted without the tab itself */
+            int ip = (mx + w / 2) / w, ci;
+            for (ci = 0; ci < n && order[ci] != i; ci++) ;
+            if (ip > n) ip = n;
+            reorder_tab(i, ip > ci ? ip - 1 : ip);
+        } else
+            draw_tabbar();
+        return;
+    }
+    draw_tabbar();
+    if (!drag_moved) return;
+    /* on the screen: another of our windows, or empty space */
+    sx = win->LeftEdge + win->BorderLeft + mx;
+    sy = win->TopEdge + win->BorderTop + my;
+    if (sx >= win->LeftEdge && sx < win->LeftEdge + win->Width && sy >= win->TopEdge &&
+        sy < win->TopEdge + win->Height)
+        return;                                   /* dropped in its own text */
+    {
+        int k, src = curw;
+        for (k = 0; k < MAXWIN; k++) {
+            struct Window *o;
+            if (k == src || !(o = win_of(k))) continue;
+            if (sx >= o->LeftEdge && sx < o->LeftEdge + o->Width && sy >= o->TopEdge &&
+                sy < o->TopEdge + o->Height) {
+                int lx = (int)(sx - o->LeftEdge - o->BorderLeft), ly = (int)(sy - o->TopEdge - o->BorderTop);
+                move_tab(i, k);
+                if (ly >= 0 && ly < tabh) {
+                    /* onto its tab bar: at that place */
+                    n = tab_order(order);
+                    w = tab_width(n);
+                    reorder_tab(i, (lx + w / 2) / w < n ? (lx + w / 2) / w : n - 1);
+                }
+                return;
+            }
+        }
+        if (n > 1) {
+            /* a window of its own, where it was dropped */
+            int nw = open_window((int)sx, (int)sy);
+            if (nw >= 0) move_tab(i, nw);
+        }
     }
 }
 
@@ -2599,7 +2735,7 @@ static void build_menus(void)
         menus = NULL;
     }
     if (nmenu) FreeVec(nmenu);
-    if (!(nmenu = AllocVec((32 + MAXPROFMENU) * sizeof(struct NewMenu), MEMF_CLEAR))) return;
+    if (!(nmenu = AllocVec((48 + MAXPROFMENU) * sizeof(struct NewMenu), MEMF_CLEAR))) return;
     m = nmenu;
     NMI(NM_TITLE, "AmiBash", 0, 0);
     NMI(NM_ITEM, "About AmiBash...", "?", CMD_ABOUT);
@@ -2608,10 +2744,15 @@ static void build_menus(void)
     NMI(NM_ITEM, "New Tab", "T", CMD_NEWTAB);
     NMI(NM_ITEM, "New Tab with Profile", 0, 0);
     for (p = profiles; p && n < MAXPROFMENU; p = p->next, n++) NMI(NM_SUB, p->name, 0, CMD_PROFILE + n);
+    NMI(NM_ITEM, "New Window", "N", CMD_NEWWIN);
     NMI(NM_ITEM, "Close Tab", "W", CMD_CLOSETAB);
     NMI(NM_ITEM, NM_BARLABEL, 0, 0);
     NMI(NM_ITEM, "Previous Tab", "[", CMD_PREVTAB);
     NMI(NM_ITEM, "Next Tab", "]", CMD_NEXTTAB);
+    NMI(NM_ITEM, "Move Tab Left", "<", CMD_TABLEFT);
+    NMI(NM_ITEM, "Move Tab Right", ">", CMD_TABRIGHT);
+    NMI(NM_ITEM, "Move Tab to New Window", "D", CMD_DETACH);
+    NMI(NM_ITEM, "Merge All Windows", "M", CMD_MERGE);
     NMI(NM_ITEM, NM_BARLABEL, 0, 0);
     NMI(NM_ITEM, "Preferences...", ",", CMD_PREFS);
     NMI(NM_ITEM, NM_BARLABEL, 0, 0);
@@ -2690,7 +2831,7 @@ static void do_cmd(int cmd)
     case CMD_PREFS:
         if (win && prefs_open(win->WScreen, curprof, prefs_apply, prefs_changed)) DisplayBeep(scr);
         break;
-    case CMD_QUIT: quitting = 1; break;
+    case CMD_QUIT: quitting = 1; break;      /* every window */
     case CMD_COPY: if (t && t->sel_on) copy_selection(t); break;
     case CMD_PASTE: paste_clip(t); break;
     case CMD_SELALL: select_all(t); break;
@@ -2700,6 +2841,20 @@ static void do_cmd(int cmd)
     case CMD_FONT: font_requester(); break;
     case CMD_ABOUT: about(); break;
     case CMD_CHECKUPD: check_update(); break;
+    case CMD_NEWWIN:
+        if (open_window(-1, -1) < 0 || new_tab() < 0) DisplayBeep(scr);
+        break;
+    case CMD_TABLEFT: shift_tab(-1); break;
+    case CMD_TABRIGHT: shift_tab(1); break;
+    case CMD_DETACH:
+        if (cur >= 0 && ntabs_open > 1) {
+            int i = cur, nw = open_window(-1, -1);
+            if (nw >= 0) move_tab(i, nw);
+            else DisplayBeep(scr);
+        } else
+            DisplayBeep(scr);
+        break;
+    case CMD_MERGE: merge_windows(); break;
     default:
         if (cmd >= CMD_PROFILE) {
             Profile *p = profiles;
@@ -2725,14 +2880,307 @@ static void menu_pick(UWORD code)
 static char applied_font[64];
 static int applied_cols, applied_rows, applied_left = -1, applied_top = -1;
 
-static void prefs_apply(Profile *p)
+/* ------------------------------------------------------------------ */
+/* windows                                                              */
+
+/* what each window has of its own: the statics of the current window
+ * are kept here while another one is current */
+typedef struct WinCtx {
+    struct Window *win;
+    struct Menu *menus;
+    struct NewMenu *nmenu;
+    struct TextFont *font, *ownfont, *boldfont;
+    int scalable, cw, chh, base, cols, rows, tabh;
+    int cur, ntabs_open;
+    int selecting, sel_unit, last_l, last_c, clicks;
+    ULONG last_secs, last_mics;
+    LONG penv[NCOLORS];
+    Profile *curprof;
+    int pens_obtained, plus_w;
+    Object *sb_prop, *sb_up, *sb_down, *img_size, *img_up, *img_down;
+    int sb_dirty, sb_held;
+    LONG sb_settop;
+    int cur_shown, cur_x, cur_y;
+    char font_path[160];
+    UWORD font_sizes[40];
+    int nsizes;
+    UWORD font_default;
+    char applied_font[64];
+    int applied_cols, applied_rows, applied_left, applied_top;
+    int drag_tab, drag_x, drag_moved;
+    char title[80];                  /* the window's title (not copied) */
+} WinCtx;
+
+static WinCtx **wins;            /* MAXWIN of them (allocated: the resident
+                                    build may not take a static's address) */
+static WinCtx *noctx;            /* "no window": for tabs whose window closed */
+
+#define CTX_COPY(dir) \
+    dir(win); dir(menus); dir(nmenu); dir(font); dir(ownfont); dir(boldfont); dir(scalable); \
+    dir(cw); dir(chh); dir(base); dir(cols); dir(rows); dir(tabh); dir(cur); dir(ntabs_open); \
+    dir(selecting); dir(sel_unit); dir(last_l); dir(last_c); dir(clicks); dir(last_secs); \
+    dir(last_mics); dir(curprof); dir(pens_obtained); dir(plus_w); dir(sb_prop); dir(sb_up); \
+    dir(sb_down); dir(img_size); dir(img_up); dir(img_down); dir(sb_dirty); dir(sb_held); \
+    dir(sb_settop); dir(cur_shown); dir(cur_x); dir(cur_y); dir(nsizes); dir(font_default); \
+    dir(applied_cols); dir(applied_rows); dir(applied_left); dir(applied_top); dir(drag_tab); \
+    dir(drag_x); dir(drag_moved)
+#define TO_CTX(f) c->f = f
+#define FROM_CTX(f) f = c->f
+
+static void ctx_save(WinCtx *c)
+{
+    CTX_COPY(TO_CTX);
+    memcpy(c->penv, penv, sizeof(penv));
+    memcpy(c->font_path, font_path, sizeof(font_path));
+    memcpy(c->font_sizes, font_sizes, sizeof(font_sizes));
+    memcpy(c->applied_font, applied_font, sizeof(applied_font));
+}
+
+static void ctx_load(WinCtx *c)
+{
+    CTX_COPY(FROM_CTX);
+    memcpy(penv, c->penv, sizeof(penv));
+    memcpy(font_path, c->font_path, sizeof(font_path));
+    memcpy(font_sizes, c->font_sizes, sizeof(font_sizes));
+    memcpy(applied_font, c->applied_font, sizeof(applied_font));
+}
+
+/* a fresh window's state */
+static void ctx_init(WinCtx *c)
+{
+    static const LONG pens0[7] = {2, 1, 2, 3, 1, 3, 1};
+    memset(c, 0, sizeof(*c));
+    c->cw = c->chh = 8;
+    c->base = 6;
+    c->cols = 80;
+    c->rows = 24;
+    c->cur = -1;
+    c->sb_settop = -1;
+    c->applied_left = c->applied_top = -1;
+    c->drag_tab = -1;
+    memcpy(c->penv, pens0, sizeof(pens0));
+}
+
+static void switch_win(int w)
+{
+    WinCtx *to = w >= 0 ? wins[w] : noctx;
+    if (w == curw || !to) return;
+    if (curw < 0) {
+        if (noctx) ctx_save(noctx);
+    } else if (wins[curw])
+        ctx_save(wins[curw]);
+    ctx_load(to);
+    curw = w;
+}
+
+/* the context of tab t: its window's, or (window gone) one of its size */
+static void switch_tab(Tab *t)
+{
+    if (t->wid >= 0 && t->wid < MAXWIN && wins[t->wid]) {
+        switch_win(t->wid);
+        return;
+    }
+    switch_win(-1);
+    cols = t->tcols;
+    rows = t->trows;
+}
+
+static struct Window *win_of(int w)
+{
+    if (w == curw) return win;
+    return w >= 0 && w < MAXWIN && wins[w] ? wins[w]->win : NULL;
+}
+
+static char *win_title(void)
+{
+    return curw >= 0 && wins[curw] ? wins[curw]->title : NULL;
+}
+
+static int nwindows(void)
+{
+    int k, n = 0;
+    for (k = 0; k < MAXWIN; k++)
+        if (wins[k]) n++;
+    return n;
+}
+
+static void choose_font(void);
+
+/* a new window (and its state), current afterwards; at x, y on the
+ * screen, or (-1) the place from Preferences for the first window and
+ * a little below the last one used for the others; -1 if none */
+static int open_window(int x, int y)
+{
+    int w, first = nwindows() == 0;
+    LONG W, H;
+    WinCtx *c;
+    for (w = 0; w < MAXWIN && wins[w]; w++) ;
+    if (w == MAXWIN || !(c = AllocVec(sizeof(WinCtx), MEMF_ANY))) return -1;
+    if (x < 0 && !first && win_of(actw)) {
+        x = win_of(actw)->LeftEdge + 24;
+        y = win_of(actw)->TopEdge + 24;
+    }
+    ctx_init(c);
+    wins[w] = c;
+    switch_win(w);
+    /* fixed-width system font (Prefs/Font "System default text") until
+     * choose_font() finds a better one */
+    {
+        struct TextAttr ta;
+        ta.ta_Name = GfxBase->DefaultFont->tf_Message.mn_Node.ln_Name;
+        ta.ta_YSize = GfxBase->DefaultFont->tf_YSize;
+        ta.ta_Style = 0;
+        ta.ta_Flags = 0;
+        font = OpenFont(&ta);
+        if (!font) font = GfxBase->DefaultFont;
+    }
+    make_scroller();
+    default_box(&W, &H);
+    if (x < 0 && first) {
+        x = win_left >= 0 && win_left + W <= scr->Width ? win_left : 20;
+        y = win_top >= 0 && win_top + H <= scr->Height ? win_top : scr->BarHeight + 1;
+    }
+    if (x < 0) x = 20;
+    if (y < 0) y = scr->BarHeight + 1;
+    if (x + W > scr->Width) x = scr->Width - W > 0 ? scr->Width - W : 0;
+    if (y + H > scr->Height) y = scr->Height - H > 0 ? scr->Height - H : 0;
+    win = OpenWindowTags(NULL,
+                         WA_Left, x, WA_Top, y, WA_Width, W, WA_Height, H,
+                         WA_MinWidth, 200, WA_MinHeight, 80, WA_MaxWidth, -1, WA_MaxHeight, -1,
+                         WA_Title, (ULONG)"bash", WA_ScreenTitle, (ULONG)"AmiBash Terminal",
+                         WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
+                         WA_SizeGadget, TRUE, WA_SizeBRight, TRUE, WA_GimmeZeroZero, TRUE,
+                         WA_Gadgets, (ULONG)sb_prop,
+                         WA_Activate, TRUE, WA_SmartRefresh, TRUE, WA_NewLookMenus, TRUE,
+                         WA_PubScreen, (ULONG)scr,
+                         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MOUSEBUTTONS |
+                                       IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW | IDCMP_GADGETDOWN |
+                                       IDCMP_GADGETUP | IDCMP_IDCMPUPDATE | IDCMP_MOUSEMOVE,
+                         TAG_END);
+    if (!win) {
+        free_scroller();
+        switch_win(-1);
+        wins[w] = NULL;
+        FreeVec(c);
+        return -1;
+    }
+    SetFont(win->RPort, font);
+    obtain_pens(prof_default());
+    if (curprof) strcpy(applied_font, curprof->font);
+    choose_font();
+    applied_cols = win_cols;
+    applied_rows = win_rows;
+    applied_left = win_left;
+    applied_top = win_top;
+    layout();
+    if (win_cols || win_rows || (first && (win_left >= 0 || win_top >= 0)))
+        place_window(win_cols, win_rows, first ? win_left : -1, first ? win_top : -1);
+    build_menus();
+    actw = w;
+    return w;
+}
+
+/* close window w (its tabs have gone or moved) */
+static void close_window(int w)
+{
+    if (!wins[w]) return;
+    switch_win(w);
+    if (win) {
+        if (menus) ClearMenuStrip(win);
+        release_pens();
+        CloseWindow(win);
+        win = NULL;
+    }
+    if (menus) FreeMenus(menus);
+    menus = NULL;
+    if (nmenu) FreeVec(nmenu);
+    nmenu = NULL;
+    free_scroller();
+    if (boldfont) CloseFont(boldfont);
+    boldfont = NULL;
+    if (ownfont) CloseFont(ownfont);
+    ownfont = NULL;
+    switch_win(-1);
+    FreeVec(wins[w]);
+    wins[w] = NULL;
+    if (actw == w) {
+        int k;
+        actw = -1;
+        for (k = 0; k < MAXWIN; k++)
+            if (wins[k]) actw = k;
+    }
+}
+
+/* tab i into window w (and out of its own) */
+static void move_tab(int i, int w)
+{
+    Tab *t = &tabs[i];
+    int src = t->wid;
+    if (src == w || !wins[w] || !t->used || t->hidden) return;
+    if (src >= 0 && wins[src]) {
+        switch_win(src);
+        if (cur == i) cursor_hide(t);
+        if (drag_tab == i) drag_tab = -1;
+        t->wid = -1;                     /* out of this window's bar */
+        ntabs_open--;
+        selecting = 0;
+        if (cur == i) {
+            cur = -1;
+            step_tab(1);
+        }
+        draw_tabbar();
+        if (cur >= 0) redraw_tab(&tabs[cur]);
+        update_title();
+    }
+    switch_win(w);
+    resize_tab(t, cols, rows);
+    t->view = 0;
+    t->wid = w;
+    t->pos = next_pos();
+    ntabs_open++;
+    select_tab(i);
+    WindowToFront(win);
+    ActivateWindow(win);
+    actw = w;
+}
+
+/* every tab of the other windows into the current one */
+static void merge_windows(void)
+{
+    int i, w = curw;
+    for (i = 0; i < MAXTABS; i++)
+        if (tabs[i].used && !tabs[i].hidden && tabs[i].wid != w) move_tab(i, w);
+}
+
+/* the close gadget: the tabs of the current window go */
+static void close_window_tabs(void)
 {
     int i;
-    Tab *t;
-    Profile *ap;
+    for (i = 0; i < MAXTABS; i++)
+        if (tabs[i].used && !tabs[i].hidden && tabs[i].wid == curw) close_tab(i);
+}
+
+static void prefs_apply_win(void);
+
+static void prefs_apply(Profile *p)
+{
+    int i, w, back = curw;
     (void)p;
     for (i = 0; i < MAXTABS; i++)
         if (tabs[i].used && !prof_by_id(tabs[i].prof)) tabs[i].prof = prof_default()->id;
+    for (w = 0; w < MAXWIN; w++)
+        if (wins[w]) {
+            switch_win(w);
+            prefs_apply_win();
+        }
+    if (back >= 0 && wins[back]) switch_win(back);
+}
+
+/* prefs_apply() for the current window */
+static void prefs_apply_win(void)
+{
+    Tab *t;
+    Profile *ap;
     if (!win) return;
     t = active();
     ap = t ? prof_by_id(t->prof) : prof_default();
@@ -2745,11 +3193,13 @@ static void prefs_apply(Profile *p)
     }
     if (win_cols != applied_cols || win_rows != applied_rows || win_left != applied_left ||
         win_top != applied_top) {
+        /* the place is for the first window: only moved when it is alone */
+        int alone = nwindows() == 1;
         applied_cols = win_cols;
         applied_rows = win_rows;
         applied_left = win_left;
         applied_top = win_top;
-        place_window(win_cols, win_rows, win_left, win_top);   /* NEWSIZE lays it out */
+        place_window(win_cols, win_rows, alone ? win_left : -1, alone ? win_top : -1);
     }
     draw_tabbar();
     if (t) redraw_tab(t);
@@ -2758,13 +3208,19 @@ static void prefs_apply(Profile *p)
 /* the list of profiles changed: the menu, and tabs of deleted ones */
 static void prefs_changed(void)
 {
-    int i;
+    int i, w, back = curw;
     for (i = 0; i < MAXTABS; i++)
         if (tabs[i].used && !prof_by_id(tabs[i].prof)) tabs[i].prof = prof_default()->id;
-    build_menus();
+    for (w = 0; w < MAXWIN; w++)
+        if (wins[w]) {
+            switch_win(w);
+            build_menus();
+        }
+    if (back >= 0 && wins[back]) switch_win(back);
 }
 
-/* message from a shell: "new" / "next" / "prev" */
+/* message from a shell: "new" (tab), "window" (bash --term), "next" /
+ * "prev"; for the window used last */
 typedef struct TermMsg { struct Message m; char cmd[8]; LONG result; } TermMsg;
 
 static void handle_pubmsg(void)
@@ -2772,7 +3228,11 @@ static void handle_pubmsg(void)
     TermMsg *m;
     while ((m = (TermMsg *)GetMsg(pubport)) != NULL) {
         dbg("pubmsg %s", (LONG)m->cmd, 0, 0);
-        if (strcmp(m->cmd, "new") == 0) m->result = new_tab() >= 0 ? 0 : -1;
+        if (actw >= 0 && wins[actw]) switch_win(actw);
+        if (strcmp(m->cmd, "window") == 0)
+            m->result = open_window(-1, -1) >= 0 && new_tab() >= 0 ? 0 : -1;
+        else if (curw < 0) m->result = -1;
+        else if (strcmp(m->cmd, "new") == 0) m->result = new_tab() >= 0 ? 0 : -1;
         else if (strcmp(m->cmd, "next") == 0) {
             step_tab(1);
             m->result = 0;
@@ -2846,9 +3306,8 @@ static int term_fail(const char *why)
 
 int term_main(const char *selfpath)
 {
-    struct TextAttr ta;
-    int W, H, i;
-    ULONG wsig, tsig, psig, all;
+    int i, w;
+    ULONG tsig, psig, all;
     {
         /* AMIBASH_TERMDEBUG=1 logs to T:AmiBash-term.log, or give a file */
         char b[108];
@@ -2856,27 +3315,24 @@ int term_main(const char *selfpath)
             dbgfh = Open((STRPTR)(strchr(b, ':') ? b : "T:AmiBash-term.log"), MODE_NEWFILE);
     }
     if (!open_libs()) return term_fail("needs gadtools.library and keymap.library V37");
-    dmg = AllocVec(2 * DMAXROWS * sizeof(WORD), MEMF_ANY);   /* without it, output is drawn at once */
     strncpy(self, selfpath, sizeof(self) - 1);
     if (FindPort((STRPTR)"AmiBash.Terminal")) {
-        /* a terminal is already running: just open a tab there */
-        return term_request("new") == 0 ? 0 : 10;
+        /* a terminal is already running: another window there */
+        return term_request("window") == 0 ? 0 : 10;
     }
+    dmg = AllocVec(2 * DMAXROWS * sizeof(WORD), MEMF_ANY);   /* without it, output is drawn at once */
     tabs = AllocVec(MAXTABS * sizeof(Tab), MEMF_ANY | MEMF_CLEAR);
-    if (!tabs) return term_fail("out of memory");
+    noctx = AllocVec(sizeof(WinCtx), MEMF_ANY);
+    wins = AllocVec(MAXWIN * sizeof(WinCtx *), MEMF_ANY | MEMF_CLEAR);
+    if (!tabs || !noctx || !wins) return term_fail("out of memory");
+    ctx_init(noctx);
+    ctx_save(noctx);                 /* the statics' first values are no window's */
+    curw = -1;
     prof_load();
     scr = LockPubScreen(NULL);
     if (!scr) return term_fail("cannot lock the screen");
     dri = GetScreenDrawInfo(scr);
     vi = GetVisualInfo(scr, TAG_END);
-    /* fixed-width system font (Prefs/Font "System default text") until
-     * choose_font() finds a better one */
-    ta.ta_Name = GfxBase->DefaultFont->tf_Message.mn_Node.ln_Name;
-    ta.ta_YSize = GfxBase->DefaultFont->tf_YSize;
-    ta.ta_Style = 0;
-    ta.ta_Flags = 0;
-    font = OpenFont(&ta);
-    if (!font) font = GfxBase->DefaultFont;
     /* dark theme by default (like most terminals): text pen 2 on pen 1 */
     def_attr = A_DEFFG | A_DEFBG;
     {
@@ -2887,46 +3343,9 @@ int term_main(const char *selfpath)
             if (sb_lines > 20000) sb_lines = 20000;
         }
     }
-    make_scroller();
-    {
-        LONG dw, dh;
-        default_box(&dw, &dh);
-        W = dw;
-        H = dh;
-    }
-    win = OpenWindowTags(NULL,
-                         WA_Left, win_left >= 0 && win_left + W <= scr->Width ? win_left : 20,
-                         WA_Top, win_top >= 0 && win_top + H <= scr->Height ? win_top : scr->BarHeight + 1,
-                         WA_Width, W, WA_Height, H,
-                         WA_MinWidth, 200, WA_MinHeight, 80, WA_MaxWidth, -1, WA_MaxHeight, -1,
-                         WA_Title, (ULONG)"bash", WA_ScreenTitle, (ULONG)"AmiBash Terminal",
-                         WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
-                         WA_SizeGadget, TRUE, WA_SizeBRight, TRUE, WA_GimmeZeroZero, TRUE,
-                         WA_Gadgets, (ULONG)sb_prop,
-                         WA_Activate, TRUE, WA_SmartRefresh, TRUE, WA_NewLookMenus, TRUE,
-                         WA_PubScreen, (ULONG)scr,
-                         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MOUSEBUTTONS |
-                                       IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW | IDCMP_GADGETDOWN |
-                                       IDCMP_GADGETUP | IDCMP_IDCMPUPDATE | IDCMP_MOUSEMOVE,
-                         TAG_END);
+    w = open_window(-1, -1);
     UnlockPubScreen(NULL, scr);
-    if (!win) {
-        free_scroller();
-        return term_fail("cannot open the window (out of memory?)");
-    }
-    SetFont(win->RPort, font);
-    obtain_pens(prof_default());
-    if (curprof) strcpy(applied_font, curprof->font);
-    choose_font();
-    applied_cols = win_cols;
-    applied_rows = win_rows;
-    applied_left = win_left;
-    applied_top = win_top;
-    if (win_cols || win_rows || win_left >= 0 || win_top >= 0) {
-        layout();
-        place_window(win_cols, win_rows, win_left, win_top);
-    }
-    build_menus();
+    if (w < 0) return term_fail("cannot open the window (out of memory?)");
     pubport = CreateMsgPort();
     if (pubport) {
         pubport->mp_Node.ln_Name = (char *)"AmiBash.Terminal";
@@ -2945,67 +3364,64 @@ int term_main(const char *selfpath)
     SetVar((STRPTR)"AMIBASH_TERM", (STRPTR)"1", -1, GVF_LOCAL_ONLY);
     SetVar((STRPTR)"TERM_PROGRAM", (STRPTR)"AmiBash", -1, GVF_LOCAL_ONLY);
     SetVar((STRPTR)"AMIBASH_SELF", (STRPTR)NEARP(self), -1, GVF_LOCAL_ONLY);
-    layout();
     new_tab();
 
-    while (!quitting || 1) {
-        int alive = 0, visible = 0;
+    for (;;) {
+        int alive = 0;
+        /* tabs whose shell has gone */
         for (i = 0; i < MAXTABS; i++) {
             if (!tabs[i].used) continue;
             if (tabs[i].started && tabs[i].opencount <= 0) {
                 int was = !tabs[i].hidden;
+                switch_tab(&tabs[i]);
                 tab_free(&tabs[i]);
-                if (was) {
+                if (was && win) {
                     ntabs_open--;
                     if (cur == i) {
                         cur = -1;
                         step_tab(1);
-                        if (cur < 0) {
-                            int k;
-                            for (k = 0; k < MAXTABS; k++)
-                                if (tabs[k].used && !tabs[k].hidden) {
-                                    select_tab(k);
-                                    break;
-                                }
-                        }
                     }
-                    if (win) {
-                        draw_tabbar();
-                        if (cur >= 0) redraw_tab(&tabs[cur]);
-                        update_title();
-                    }
+                    draw_tabbar();
+                    if (cur >= 0) redraw_tab(&tabs[cur]);
+                    update_title();
                 }
                 continue;
             }
             alive++;
-            if (!tabs[i].hidden) visible++;
         }
         if (quitting) {
             for (i = 0; i < MAXTABS; i++)
-                if (tabs[i].used && !tabs[i].hidden) close_tab(i);
-            visible = 0;
+                if (tabs[i].used && !tabs[i].hidden) {
+                    switch_tab(&tabs[i]);
+                    close_tab(i);
+                }
         }
-        if (visible == 0 && win) {
-            /* last tab gone: the window goes away; keep serving until
-             * every shell has closed its handles */
-            prefs_close();
-            ClearMenuStrip(win);
-            release_pens();
-            CloseWindow(win);
-            win = NULL;
+        /* windows without tabs go away; the shells of hidden tabs are
+         * served until they have closed their handles */
+        for (w = 0; w < MAXWIN; w++) {
+            int vis = 0;
+            if (!wins[w]) continue;
+            for (i = 0; i < MAXTABS; i++)
+                if (tabs[i].used && !tabs[i].hidden && tabs[i].wid == w) vis++;
+            if (vis == 0) close_window(w);
         }
+        if (nwindows() == 0) prefs_close();
         if (alive == 0) break;
-        wsig = win ? 1UL << win->UserPort->mp_SigBit : 0;
         tsig = timerport ? 1UL << timerport->mp_SigBit : 0;
         psig = pubport ? 1UL << pubport->mp_SigBit : 0;
-        all = wsig | tsig | psig | prefs_signal() | SIGBREAKF_CTRL_F;
+        all = tsig | psig | prefs_signal() | SIGBREAKF_CTRL_F;
+        for (w = 0; w < MAXWIN; w++)
+            if (win_of(w)) all |= 1UL << win_of(w)->UserPort->mp_SigBit;
         for (i = 0; i < MAXTABS; i++)
             if (tabs[i].used) all |= 1UL << tabs[i].port->mp_SigBit;
         if (Wait(all) & SIGBREAKF_CTRL_F) launch_done();
         if (prefs_is_open()) prefs_handle();
         for (i = 0; i < MAXTABS; i++) {
             struct Message *m;
+            struct MsgPort *pt;
             if (!tabs[i].used) continue;
+            pt = tabs[i].port;
+            if (pt->mp_MsgList.lh_TailPred != (struct Node *)&pt->mp_MsgList || tabs[i].paste) switch_tab(&tabs[i]);
             while (tabs[i].used && (m = GetMsg(tabs[i].port)) != NULL)
                 handle_packet(&tabs[i], (struct DosPacket *)m->mn_Node.ln_Name);
             if (tabs[i].used && tabs[i].paste) feed_paste(&tabs[i]);
@@ -3013,24 +3429,37 @@ int term_main(const char *selfpath)
         if (timerport && GetMsg(timerport)) {
             timer_busy = 0;
             expire_waits();
-            if (sb_held && win) {
-                /* a scroller arrow held down: keep scrolling */
-                if (((struct Gadget *)(sb_held > 0 ? sb_up : sb_down))->Flags & GFLG_SELECTED) {
-                    scroll_view(active(), sb_held);
-                    start_timer();
-                } else
-                    sb_held = 0;
+            for (w = 0; w < MAXWIN; w++) {
+                if (!wins[w]) continue;
+                switch_win(w);
+                if (sb_held && win) {
+                    /* a scroller arrow held down: keep scrolling */
+                    if (((struct Gadget *)(sb_held > 0 ? sb_up : sb_down))->Flags & GFLG_SELECTED) {
+                        scroll_view(active(), sb_held);
+                        start_timer();
+                    } else
+                        sb_held = 0;
+                }
             }
         }
         if (pubport) handle_pubmsg();
-        if (win) {
+        for (w = 0; w < MAXWIN; w++) {
             struct IntuiMessage *im;
-            while (win && (im = (struct IntuiMessage *)GetMsg(win->UserPort)) != NULL) {
-                ULONG cl = im->Class;
-                UWORD code = im->Code;
-                int mx = im->MouseX, my = im->MouseY;
-                UWORD qual = im->Qualifier;
-                ULONG secs = im->Seconds, mics = im->Micros;
+            for (;;) {
+                ULONG cl, secs, mics;
+                UWORD code, qual;
+                int mx, my;
+                /* (a command may have made another window current) */
+                if (!wins[w]) break;
+                switch_win(w);
+                if (!win || !(im = (struct IntuiMessage *)GetMsg(win->UserPort))) break;
+                cl = im->Class;
+                code = im->Code;
+                mx = im->MouseX;
+                my = im->MouseY;
+                qual = im->Qualifier;
+                secs = im->Seconds;
+                mics = im->Micros;
                 if (cl == IDCMP_RAWKEY) {
                     key_event(im);
                     ReplyMsg(&im->ExecMessage);
@@ -3051,30 +3480,46 @@ int term_main(const char *selfpath)
                 }
                 switch (cl) {
                 case IDCMP_IDCMPUPDATE: scroller_moved(); break;
-                case IDCMP_CLOSEWINDOW: quitting = 1; break;
+                case IDCMP_CLOSEWINDOW: close_window_tabs(); break;
                 case IDCMP_NEWSIZE: layout(); break;
-                case IDCMP_MENUPICK: menu_pick(code); break;
+                case IDCMP_ACTIVEWINDOW: actw = w; break;
+                case IDCMP_MENUPICK: actw = w; menu_pick(code); break;
                 case IDCMP_MOUSEBUTTONS:
+                    actw = w;
                     if (code == SELECTDOWN) {
                         if (my - win->BorderTop >= tabh)
                             sel_press(mx - win->BorderLeft, my - win->BorderTop, qual, secs, mics);
                         else
                             click(mx - win->BorderLeft, my - win->BorderTop);
-                    } else if (code == SELECTUP)
-                        sel_release();
+                    } else if (code == SELECTUP) {
+                        if (drag_tab >= 0) {
+                            ReportMouse(FALSE, win);
+                            drop_tab(mx - win->BorderLeft, my - win->BorderTop);
+                        } else
+                            sel_release();
+                    }
                     break;
                 case IDCMP_MOUSEMOVE:
-                    sel_move(mx - win->BorderLeft, my - win->BorderTop);
+                    if (drag_tab >= 0) {
+                        int x = mx - win->BorderLeft;
+                        if (x - drag_x > 4 || drag_x - x > 4 || my - win->BorderTop >= tabh ||
+                            my < win->BorderTop) drag_moved = 1;
+                        if (drag_moved) {
+                            drag_x = my - win->BorderTop < tabh && my >= win->BorderTop ? x : -1;
+                            draw_tabbar();
+                        }
+                    } else
+                        sel_move(mx - win->BorderLeft, my - win->BorderTop);
                     break;
                 }
             }
-            if (win && win->RPort->Font != font) {
-                /* setfont in a tab */
-                layout();
+            if (wins[w] && curw == w && win) {
+                if (win->RPort->Font != font) layout();      /* setfont in a tab */
+                if (sb_dirty) update_scroller();
             }
-            if (win && sb_dirty) update_scroller();
         }
     }
+    switch_win(-1);
     if (pubport) {
         RemPort(pubport);
         DeleteMsgPort(pubport);
@@ -3089,19 +3534,16 @@ int term_main(const char *selfpath)
     }
     if (timerport) DeleteMsgPort(timerport);
     prefs_close();
-    if (menus) FreeMenus(menus);
-    menus = NULL;
-    if (nmenu) FreeVec(nmenu);
-    nmenu = NULL;
+    for (w = 0; w < MAXWIN; w++)
+        if (wins[w]) close_window(w);
     if (vi) FreeVisualInfo(vi);
-    free_scroller();
-    if (boldfont) CloseFont(boldfont);
-    boldfont = NULL;
-    if (ownfont) CloseFont(ownfont);
-    ownfont = NULL;
     if (dri) FreeScreenDrawInfo(scr, dri);
     FreeVec(tabs);
     tabs = NULL;
+    FreeVec(noctx);
+    noctx = NULL;
+    FreeVec(wins);
+    wins = NULL;
     FreeVec(dmg);
     dmg = NULL;
     prof_free_all();
