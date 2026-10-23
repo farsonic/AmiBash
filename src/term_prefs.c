@@ -370,10 +370,11 @@ static int tl(const char *s)
     return TextLength(&pw->scr->RastPort, (STRPTR)s, (LONG)strlen(s));
 }
 
-static int maxw(const char *const *v)
+/* the widest of n texts (n < 0: up to a NULL) */
+static int maxw(const char *const *v, int n)
 {
     int m = 0, w;
-    for (; *v; v++)
+    for (; n < 0 ? *v != NULL : n-- > 0; v++)
         if ((w = tl(*v)) > m) m = w;
     return m;
 }
@@ -588,21 +589,25 @@ int prefs_open(struct Screen *scr, Profile *current, void (*apply)(Profile *), v
                                              "Presets", "Font", NULL};
         static const char *const pnames[] = {"* Solarized Light 2", "Delete Default", NULL};
         int box = pw->fh + 10, wgen, wcol, wtxt;
-        pw->lab = (WORD)(maxw(labels) + 12);
-        pw->lw = (WORD)(maxw(pnames) + 28);
-        pw->cl = (WORD)(maxw(color_names) + 28);
+        pw->lab = (WORD)(maxw(labels, -1) + 12);
+        pw->lw = (WORD)(maxw(pnames, -1) + 28);
+        pw->cl = (WORD)(maxw(color_names, NCOLORS) + 28);   /* no NULL at its end */
         wgen = pw->lab + tl("Previous tab's") + 40 + 2 * box;
         if (tl("Copy text when selected") + 40 > wgen) wgen = tl("Copy text when selected") + 40;
         wcol = pw->cl + 10 + tl("R") + 8 + 160;
         if (tl("Bold text in the Bold colour") + 40 > wcol) wcol = tl("Bold text in the Bold colour") + 40;
-        if (pw->lab + maxw((const char *const *)preset_labels) + 40 + tl("Apply") + 24 > wcol)
-            wcol = pw->lab + maxw((const char *const *)preset_labels) + 40 + tl("Apply") + 24;
+        if (pw->lab + maxw((const char *const *)preset_labels, -1) + 40 + tl("Apply") + 24 > wcol)
+            wcol = pw->lab + maxw((const char *const *)preset_labels, -1) + 40 + tl("Apply") + 24;
         wtxt = pw->lab + 2 * (tl("Automatic") + 24);
         pw->width = (WORD)(wgen > wcol ? (wgen > wtxt ? wgen : wtxt) : (wcol > wtxt ? wcol : wtxt));
     }
     w = scr->WBorLeft + scr->WBorRight + 8 + pw->lw + 12 + pw->width + 8;
     h = scr->WBorTop + pw->fh + 1 + 6 + (pw->fh + 6) * 15 + 40 + scr->WBorBottom;
-    if (w > scr->Width) w = scr->Width;
+    if (w > scr->Width) {
+        /* the gadgets have to fit the narrower window too */
+        pw->width -= (WORD)(w - scr->Width);
+        w = scr->Width;
+    }
     if (h > scr->Height) h = scr->Height;
     i = 0;
     wt[i].ti_Tag = WA_Left; wt[i++].ti_Data = (scr->Width - w) / 2;
