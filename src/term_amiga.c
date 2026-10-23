@@ -143,7 +143,7 @@ static int new_tab_with(Profile *p);
 enum {
     CMD_NEWTAB = 1, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
     CMD_COPY, CMD_PASTE, CMD_SELALL,
-    CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE, CMD_FONT,
+    CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE, CMD_FONT, CMD_ABOUT, CMD_CHECKUPD,
     CMD_PROFILE = 100                    /* + n: new tab with the n-th profile */
 };
 #define MAXPROFMENU 16
@@ -1851,10 +1851,10 @@ static void key_event(struct IntuiMessage *im)
     if (q & IEQUALIFIER_LCOMMAND) {
         /* Left-Amiga works like Right-Amiga for the tab shortcuts (it is
          * where Command is on a Mac keyboard under an emulator) */
-        static const char keys[] = "tw[],qcva+-0f";
+        static const char keys[] = "tw[],qcva+-0f?u";
         static const UBYTE kcmd[] = {CMD_NEWTAB, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
                                      CMD_COPY, CMD_PASTE, CMD_SELALL, CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE,
-                                     CMD_FONT};
+                                     CMD_FONT, CMD_ABOUT, CMD_CHECKUPD};
         n = MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL);
         if (n == 1 && buf[0]) {
             const char *k = strchr(keys, buf[0] == '=' ? '+' : (buf[0] >= 'A' && buf[0] <= 'Z') ? buf[0] | 0x20 : buf[0]);
@@ -2290,8 +2290,9 @@ static void default_box(LONG *w, LONG *h)
 }
 
 /* Preferences > Text > Window: c columns and r rows (0: the default
- * width or height), as far as the screen allows */
-static void size_window(int c, int r)
+ * width or height) at x, y (-1: where it is), as far as the screen
+ * allows */
+static void place_window(int c, int r, int x, int y)
 {
     LONG ww, wh, l, tp;
     default_box(&ww, &wh);
@@ -2299,17 +2300,19 @@ static void size_window(int c, int r)
     if (r > 0) wh = win->Height - win->GZZHeight + tabh + r * chh;
     if (ww > scr->Width) ww = scr->Width;
     if (wh > scr->Height - scr->BarHeight - 1) wh = scr->Height - scr->BarHeight - 1;
-    l = win->LeftEdge;
-    tp = win->TopEdge;
+    l = x >= 0 ? x : win->LeftEdge;
+    tp = y >= 0 ? y : win->TopEdge;
     if (l + ww > scr->Width) l = scr->Width - ww;
     if (tp + wh > scr->Height) tp = scr->Height - wh;
     ChangeWindowBox(win, l, tp, ww, wh);
 }
 
-void term_current_size(int *c, int *r)
+void term_current_box(int *c, int *r, int *x, int *y)
 {
     *c = cols;
     *r = rows;
+    *x = win ? win->LeftEdge : -1;
+    *y = win ? win->TopEdge : -1;
 }
 
 /* after a font change: resize the window to keep the columns and rows
@@ -2598,7 +2601,10 @@ static void build_menus(void)
     if (nmenu) FreeVec(nmenu);
     if (!(nmenu = AllocVec((32 + MAXPROFMENU) * sizeof(struct NewMenu), MEMF_CLEAR))) return;
     m = nmenu;
-    NMI(NM_TITLE, "Terminal", 0, 0);
+    NMI(NM_TITLE, "AmiBash", 0, 0);
+    NMI(NM_ITEM, "About AmiBash...", "?", CMD_ABOUT);
+    NMI(NM_ITEM, "Check for Update...", "U", CMD_CHECKUPD);
+    NMI(NM_ITEM, NM_BARLABEL, 0, 0);
     NMI(NM_ITEM, "New Tab", "T", CMD_NEWTAB);
     NMI(NM_ITEM, "New Tab with Profile", 0, 0);
     for (p = profiles; p && n < MAXPROFMENU; p = p->next, n++) NMI(NM_SUB, p->name, 0, CMD_PROFILE + n);
@@ -2628,6 +2634,51 @@ static void build_menus(void)
 static void prefs_apply(Profile *p);
 static void prefs_changed(void);
 
+static void tell(const char *title, const char *text)
+{
+    struct EasyStruct es;
+    es.es_StructSize = sizeof(es);
+    es.es_Flags = 0;
+    es.es_Title = (UBYTE *)title;
+    es.es_TextFormat = (UBYTE *)"%s";
+    es.es_GadgetFormat = (UBYTE *)"OK";
+    EasyRequest(win, &es, NULL, (ULONG)text);
+}
+
+static void about(void)
+{
+    tell("About AmiBash",
+         "AmiBash " AMIBASH_SHORTVER " (" AMIBASH_DATE ", " AMIBASH_BUILD " build)\n"
+         "GNU bash " AMIBASH_VERSION " compatible shell\n"
+         "with its own tabbed terminal\n\n"
+         "https://github.com/farsonic/AmiBash\n"
+         "GPL-3.0-or-later");
+}
+
+/* "Check for Update...": amibash-update in a new tab, which stays open
+ * to show what it found (and to run "amibash-update INSTALL") */
+static void check_update(void)
+{
+    BPTR l = Lock((STRPTR)"C:amibash-update", ACCESS_READ);
+    int i;
+    if (l) UnLock(l);
+    else {
+        tell("Check for Update",
+             "C:amibash-update is not installed.\n\n"
+             "It comes with AmiBash for 68020 or better and\n"
+             "needs AmiSSL v5 (Aminet util/libs/AmiSSL-v5-OS3).\n"
+             "Releases: https://github.com/farsonic/AmiBash/releases");
+        return;
+    }
+    if ((i = new_tab()) < 0) return;
+    {
+        /* compare with the bash this terminal runs, wherever it is */
+        char cmd[300];
+        sprintf(cmd, "amibash-update BASH=\"%.250s\"\r", self);
+        queue_input(&tabs[i], cmd, (int)strlen(cmd));
+    }
+}
+
 static void do_cmd(int cmd)
 {
     Tab *t = active();
@@ -2647,6 +2698,8 @@ static void do_cmd(int cmd)
     case CMD_SMALLER: zoom(-1); break;
     case CMD_DEFSIZE: zoom(0); break;
     case CMD_FONT: font_requester(); break;
+    case CMD_ABOUT: about(); break;
+    case CMD_CHECKUPD: check_update(); break;
     default:
         if (cmd >= CMD_PROFILE) {
             Profile *p = profiles;
@@ -2670,7 +2723,7 @@ static void menu_pick(UWORD code)
 /* from the preferences window: a profile changed (colours show at once;
  * the active tab's profile's font too) */
 static char applied_font[64];
-static int applied_cols, applied_rows;
+static int applied_cols, applied_rows, applied_left = -1, applied_top = -1;
 
 static void prefs_apply(Profile *p)
 {
@@ -2690,10 +2743,13 @@ static void prefs_apply(Profile *p)
         choose_font();
         font_resize = 0;
     }
-    if (win_cols != applied_cols || win_rows != applied_rows) {
+    if (win_cols != applied_cols || win_rows != applied_rows || win_left != applied_left ||
+        win_top != applied_top) {
         applied_cols = win_cols;
         applied_rows = win_rows;
-        size_window(win_cols, win_rows);          /* NEWSIZE lays it out */
+        applied_left = win_left;
+        applied_top = win_top;
+        place_window(win_cols, win_rows, win_left, win_top);   /* NEWSIZE lays it out */
     }
     draw_tabbar();
     if (t) redraw_tab(t);
@@ -2839,7 +2895,8 @@ int term_main(const char *selfpath)
         H = dh;
     }
     win = OpenWindowTags(NULL,
-                         WA_Left, 20, WA_Top, scr->BarHeight + 1,
+                         WA_Left, win_left >= 0 && win_left + W <= scr->Width ? win_left : 20,
+                         WA_Top, win_top >= 0 && win_top + H <= scr->Height ? win_top : scr->BarHeight + 1,
                          WA_Width, W, WA_Height, H,
                          WA_MinWidth, 200, WA_MinHeight, 80, WA_MaxWidth, -1, WA_MaxHeight, -1,
                          WA_Title, (ULONG)"bash", WA_ScreenTitle, (ULONG)"AmiBash Terminal",
@@ -2863,9 +2920,11 @@ int term_main(const char *selfpath)
     choose_font();
     applied_cols = win_cols;
     applied_rows = win_rows;
-    if (win_cols || win_rows) {
+    applied_left = win_left;
+    applied_top = win_top;
+    if (win_cols || win_rows || win_left >= 0 || win_top >= 0) {
         layout();
-        size_window(win_cols, win_rows);
+        place_window(win_cols, win_rows, win_left, win_top);
     }
     build_menus();
     pubport = CreateMsgPort();

@@ -142,8 +142,8 @@ tab bar like macOS Terminal's, each tab running its own bash.
 ```
 
 Double-click `bash` on Workbench, or type `bash --term` in a Shell or at a
-bash prompt, to open it (from bash it starts in the background and the
-current shell carries on; if a terminal is already open you get a new tab).
+bash prompt, to open it (it starts in the background and the Shell gets
+its prompt back; if a terminal is already open you get a new tab).
 If double-clicking gives a plain "Bash" console window instead, the icon
 still has an active `WINDOW=` tool type (as `bash.info` from 0.9.2 did):
 use the new `bash.info`, or put that tool type in brackets.
@@ -169,7 +169,7 @@ The shortcuts work with either Amiga key and are also in the *Terminal*,
 right away (switch that off per profile) or with Amiga-C; Amiga-V types the
 clipboard into the shell. New output clears the selection.
 
-**Preferences and profiles.** *Terminal > Preferences...* (Amiga-,) edits
+**Preferences and profiles.** *AmiBash > Preferences...* (Amiga-,) edits
 profiles, named sets of settings like in iTerm: the colours (foreground,
 background, bold, cursor, cursor text, selection, selected text and the 16
 ANSI colours, with presets such as Solarized Dark/Light, iTerm2, Workbench
@@ -178,11 +178,13 @@ directory new tabs start in (home, the previous tab's, or a fixed one),
 text sent to the shell at start, scrollback lines and copy-on-select.
 Changes show at once; *Use* keeps them for this session, *Save* in
 `ENVARC:AmiBash/terminal.prefs`, *Cancel* puts everything back. The
-profile marked `*` is the default; *Terminal > New Tab with Profile*
+profile marked `*` is the default; *AmiBash > New Tab with Profile*
 opens a tab with any other, and each tab keeps its own colours. The
-*Text* page also sets the window's size in columns and rows, for all
-profiles (*Current size* takes the window's size now; 0 is the default
-size: nearly the screen's width and 4/5 of its height).
+*Text* page also sets the window's size in columns and rows and where it
+opens (left, top), for all profiles: *Use current window* takes the
+window's size and place now; columns or rows 0 are the default size
+(nearly the screen's width and 4/5 of its height), left or top -1 the
+default place. *AmiBash > About AmiBash...* shows the version.
 
 **Fonts.** The terminal uses *AmiBashMono*, supplied in `Fonts/`: DejaVu
 Sans Mono drawn separately for every size from 10 to 43 pixels, using the
@@ -259,6 +261,22 @@ sort by CPU, priority, name and time; `-d 0.5` updates every half second;
 samples the running task 50 or 60 times a second from a vertical blank
 interrupt; see `contrib/top/README.md`. For a graphical monitor with history graphs, see
 SysPulse, a separate program.
+
+## Updates
+
+`amibash-update` (installed with bash on a 68020 or better) asks GitHub
+for the latest AmiBash release and compares it with `C:bash`:
+
+```
+amibash-update            show the latest release, and whether it is newer
+amibash-update INSTALL    download it, unpack it to T: and start its installer
+```
+
+*AmiBash > Check for Update...* in the terminal runs it in a new tab.
+GitHub is only reachable over HTTPS, so it needs AmiSSL v5 (Aminet
+`util/libs/AmiSSL-v5-OS3`) and a TCP/IP stack; unpacking needs LhA in C:
+(Aminet `util/arc/lha`). `FORCE` installs even when nothing is newer.
+See `contrib/update/README.md`.
 
 ## ssh
 

@@ -286,7 +286,14 @@ int main(int argc, char **argv)
         }
 #ifdef AMIGA
         if (strcmp(a, "--term") == 0) {
-            /* open the tabbed AmiBash Terminal */
+            /* open the tabbed AmiBash Terminal as a process of its own (or
+             * a tab in the one running), so the Shell gets its prompt back */
+            extern const char *os_self_path(void);
+            if (os_open_terminal() == 0) return 0;
+            return term_main(os_self_path());
+        }
+        if (strcmp(a, "--term-run") == 0) {
+            /* that process */
             extern const char *os_self_path(void);
             return term_main(os_self_path());
         }

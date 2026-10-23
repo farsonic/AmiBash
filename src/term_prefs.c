@@ -38,7 +38,7 @@ extern struct Library *GadToolsBase, *AslBase, *UtilityBase;
 
 Profile *profiles;
 char default_profile[32];
-int win_cols, win_rows;
+int win_cols, win_rows, win_left = -1, win_top = -1;
 static int next_id = 1;
 
 const char *const color_names[NCOLORS] = {
@@ -167,7 +167,7 @@ Profile *prof_default(void)
 
 /* ---- the file ---------------------------------------------------------------
  *   default NAME
- *   window COLUMNS ROWS     (0: automatic)
+ *   window COLUMNS ROWS LEFT TOP     (0, 0, -1, -1: automatic)
  *   profile NAME
  *   color N RRGGBB          (N: 0 .. NCOLORS-1, see enum in term.h)
  *   brighten 0|1  boldcolor 0|1  copysel 0|1  scrollback N  dirmode N
@@ -201,6 +201,7 @@ void prof_load(void)
     prof_free_all();
     default_profile[0] = 0;
     win_cols = win_rows = 0;
+    win_left = win_top = -1;
     for (l = b; l && *l; l = e) {
         for (e = l; *e && *e != '\n'; e++) ;
         if (*e) *e++ = 0;
@@ -208,9 +209,11 @@ void prof_load(void)
         if (*v) *v++ = 0;
         if (!strcmp(l, "default")) sprintf(default_profile, "%.31s", v);
         else if (!strcmp(l, "window")) {
-            char *r = strchr(v, ' ');
-            win_cols = atoi(v);
-            win_rows = r ? atoi(r + 1) : 0;
+            char *e2;
+            win_cols = (int)strtol(v, &e2, 10);
+            win_rows = (int)strtol(e2, &e2, 10);
+            if (*e2) win_left = (int)strtol(e2, &e2, 10);
+            if (*e2) win_top = (int)strtol(e2, &e2, 10);
         }
         else if (!strcmp(l, "profile")) cur = prof_new(v, NULL);
         else if (!cur) continue;
@@ -241,7 +244,7 @@ static int write_prefs(const char *dir, const char *file)
     else if ((l = CreateDir((STRPTR)dir)) != 0) UnLock(l);
     else return -1;
     if (!(fh = Open((STRPTR)file, MODE_NEWFILE))) return -1;
-    sprintf(line, "default %s\nwindow %d %d\n", default_profile, win_cols, win_rows);
+    sprintf(line, "default %s\nwindow %d %d %d %d\n", default_profile, win_cols, win_rows, win_left, win_top);
     FPuts(fh, (STRPTR)line);
     for (p = profiles; p; p = p->next) {
         sprintf(line, "profile %s\n", p->name);
@@ -275,7 +278,7 @@ enum {
     G_PROFILES = 1, G_NEW, G_COPY, G_DELETE, G_DEFAULT, G_PAGE,
     G_NAME, G_CMD, G_DIRMODE, G_DIR, G_DIRREQ, G_SCROLLBACK, G_COPYSEL,
     G_COLORS, G_R, G_G, G_B, G_BRIGHTEN, G_BOLDCOLOR, G_PRESET, G_APPLYPRESET,
-    G_FONTNAME, G_FONTREQ, G_FONTAUTO, G_COLS, G_ROWS, G_CURSIZE,
+    G_FONTNAME, G_FONTREQ, G_FONTAUTO, G_COLS, G_ROWS, G_LEFT, G_TOP, G_CURSIZE,
     G_SAVE, G_USE, G_CANCEL, G_MAX
 };
 
@@ -297,7 +300,7 @@ typedef struct Prefs {
     /* undo for Cancel */
     Profile *saved;
     char saved_default[32];
-    int saved_cols, saved_rows;
+    int saved_cols, saved_rows, saved_left, saved_top;
     /* the colour swatch */
     WORD sx, sy, sw, sh;
     LONG swpen;
@@ -484,18 +487,28 @@ static struct Gadget *build_gadgets(void)
                TAG_IGNORE, 0, TAG_IGNORE, 0);
         g = mk(BUTTON_KIND, g, &ng, G_FONTAUTO, rx + lab + (rw - lab) / 2 + 2, y, (rw - lab) / 2 - 2, bh,
                "_Automatic", TAG_IGNORE, 0, TAG_IGNORE, 0, TAG_IGNORE, 0);
-        /* the window, for all profiles; 0 is the default size */
-        y += bh + 14;
-        g = mk(INTEGER_KIND, g, &ng, G_COLS, rx + lab, y, tl("0000") + 16, bh, "Window columns",
-               GTIN_Number, (ULONG)win_cols, GTIN_MaxChars, 3, TAG_IGNORE, 0);
-        g = mk(BUTTON_KIND, g, &ng, G_CURSIZE, rx + lab + tl("0000") + 24, y, rw - lab - tl("0000") - 24,
-               bh, "Current si_ze", TAG_IGNORE, 0, TAG_IGNORE, 0, TAG_IGNORE, 0);
-        y += bh + 4;
-        g = mk(INTEGER_KIND, g, &ng, G_ROWS, rx + lab, y, tl("0000") + 16, bh, "Window rows",
-               GTIN_Number, (ULONG)win_rows, GTIN_MaxChars, 3, TAG_IGNORE, 0);
-        y += bh + 4;
-        g = mk(TEXT_KIND, g, &ng, 0, rx + lab, y, rw - lab, bh, NULL, GTTX_Text,
-               (ULONG)"0: the default size", TAG_IGNORE, 0, TAG_IGNORE, 0);
+        /* the window, for all profiles: size and place (0 columns or rows:
+         * the default size; -1 left or top: the default place) */
+        {
+            int nw = tl("00000") + 16;
+            y += bh + 14;
+            g = mk(INTEGER_KIND, g, &ng, G_COLS, rx + lab, y, nw, bh, "Window columns",
+                   GTIN_Number, (ULONG)win_cols, GTIN_MaxChars, 3, TAG_IGNORE, 0);
+            g = mk(BUTTON_KIND, g, &ng, G_CURSIZE, rx + lab + nw + 8, y, rw - lab - nw - 8, bh,
+                   "Use current wi_ndow", TAG_IGNORE, 0, TAG_IGNORE, 0, TAG_IGNORE, 0);
+            y += bh + 4;
+            g = mk(INTEGER_KIND, g, &ng, G_ROWS, rx + lab, y, nw, bh, "Window rows",
+                   GTIN_Number, (ULONG)win_rows, GTIN_MaxChars, 3, TAG_IGNORE, 0);
+            y += bh + 4;
+            g = mk(INTEGER_KIND, g, &ng, G_LEFT, rx + lab, y, nw, bh, "Window left",
+                   GTIN_Number, (ULONG)win_left, GTIN_MaxChars, 5, TAG_IGNORE, 0);
+            y += bh + 4;
+            g = mk(INTEGER_KIND, g, &ng, G_TOP, rx + lab, y, nw, bh, "Window top",
+                   GTIN_Number, (ULONG)win_top, GTIN_MaxChars, 5, TAG_IGNORE, 0);
+            y += bh + 4;
+            g = mk(TEXT_KIND, g, &ng, 0, rx + lab, y, rw - lab, bh, NULL, GTTX_Text,
+                   (ULONG)"Size 0, place -1: the default", TAG_IGNORE, 0, TAG_IGNORE, 0);
+        }
     }
     /* bottom */
     y = pw->win ? pw->win->Height - s->WBorBottom - bh - 6 : 0;
@@ -594,6 +607,8 @@ int prefs_open(struct Screen *scr, Profile *current, void (*apply)(Profile *), v
     pw->saved = copy_all(pw->saved_default);
     pw->saved_cols = win_cols;
     pw->saved_rows = win_rows;
+    pw->saved_left = win_left;
+    pw->saved_top = win_top;
     for (i = 0; i < NPRESETS && i < 7; i++) preset_labels[i] = (STRPTR)presets[i].name;
     preset_labels[i] = NULL;
     NewList(&pw->clist);
@@ -609,7 +624,8 @@ int prefs_open(struct Screen *scr, Profile *current, void (*apply)(Profile *), v
         /* sizes from the screen font: labels, the lists and the widest
          * line of each page */
         static const char *const labels[] = {"Page", "Name", "Send at start", "Directory", "Scrollback lines",
-                                             "Presets", "Font", "Window columns", "Window rows", NULL};
+                                             "Presets", "Font", "Window columns", "Window rows", "Window left",
+                                             "Window top", NULL};
         static const char *const pnames[] = {"* Solarized Light 2", "Delete Default", NULL};
         int box = pw->fh + 10, wgen, wcol, wtxt;
         pw->lab = (WORD)(maxw(labels, -1) + 12);
@@ -622,8 +638,10 @@ int prefs_open(struct Screen *scr, Profile *current, void (*apply)(Profile *), v
         if (pw->lab + maxw((const char *const *)preset_labels, -1) + 40 + tl("Apply") + 24 > wcol)
             wcol = pw->lab + maxw((const char *const *)preset_labels, -1) + 40 + tl("Apply") + 24;
         wtxt = pw->lab + 2 * (tl("Automatic") + 24);
-        if (pw->lab + tl("0000") + 24 + tl("Current size") + 24 > wtxt)
-            wtxt = pw->lab + tl("0000") + 24 + tl("Current size") + 24;
+        if (pw->lab + tl("00000") + 24 + tl("Use current window") + 24 > wtxt)
+            wtxt = pw->lab + tl("00000") + 24 + tl("Use current window") + 24;
+        if (pw->lab + tl("Size 0, place -1: the default") + 8 > wtxt)
+            wtxt = pw->lab + tl("Size 0, place -1: the default") + 8;
         pw->width = (WORD)(wgen > wcol ? (wgen > wtxt ? wgen : wtxt) : (wcol > wtxt ? wcol : wtxt));
     }
     w = scr->WBorLeft + scr->WBorRight + 8 + pw->lw + 12 + pw->width + 8;
@@ -692,6 +710,8 @@ static void revert(void)
     strcpy(default_profile, pw->saved_default);
     win_cols = pw->saved_cols;
     win_rows = pw->saved_rows;
+    win_left = pw->saved_left;
+    win_top = pw->saved_top;
     pw->sel = prof_default();
 }
 
@@ -748,15 +768,19 @@ static void choose_font(void)
     }
 }
 
-/* the window size gadgets (on the Text page) */
+/* the window gadgets (on the Text page) */
 static void read_size(void)
 {
     LONG v;
-    if (pw->page != 2 || !pw->g[G_COLS] || !pw->g[G_ROWS]) return;
+    if (pw->page != 2 || !pw->g[G_COLS] || !pw->g[G_ROWS] || !pw->g[G_LEFT] || !pw->g[G_TOP]) return;
     v = ((struct StringInfo *)pw->g[G_COLS]->SpecialInfo)->LongInt;
     win_cols = v < 0 ? 0 : v > 500 ? 500 : (int)v;
     v = ((struct StringInfo *)pw->g[G_ROWS]->SpecialInfo)->LongInt;
     win_rows = v < 0 ? 0 : v > 300 ? 300 : (int)v;
+    v = ((struct StringInfo *)pw->g[G_LEFT]->SpecialInfo)->LongInt;
+    win_left = v < -1 ? -1 : v > 9999 ? 9999 : (int)v;
+    v = ((struct StringInfo *)pw->g[G_TOP]->SpecialInfo)->LongInt;
+    win_top = v < -1 ? -1 : v > 9999 ? 9999 : (int)v;
 }
 
 void prefs_handle(void)
@@ -890,10 +914,12 @@ void prefs_handle(void)
                 break;
             case G_COLS:
             case G_ROWS:
+            case G_LEFT:
+            case G_TOP:
                 read_size();
                 break;
             case G_CURSIZE:
-                term_current_size(&win_cols, &win_rows);
+                term_current_box(&win_cols, &win_rows, &win_left, &win_top);
                 show_page();
                 break;
             case G_FONTAUTO:

@@ -36,7 +36,8 @@ typedef struct Profile {
 extern Profile *profiles;                /* all of them, in order */
 extern char default_profile[32];
 extern int win_cols, win_rows;           /* the window's size; 0: automatic */
-void term_current_size(int *cols, int *rows);   /* the terminal's now */
+extern int win_left, win_top;            /* where it opens; -1: automatic */
+void term_current_box(int *cols, int *rows, int *left, int *top);   /* now */
 
 void     prof_load(void);                /* ENV:/ENVARC:AmiBash/terminal.prefs */
 int      prof_save(void);                /* 0 ok */

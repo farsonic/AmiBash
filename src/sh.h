@@ -14,8 +14,8 @@
 #include "os.h"
 
 #define AMIBASH_VERSION "5.2.0(1)-amiga"
-#define AMIBASH_SHORTVER "0.1"
-#define AMIBASH_DATE "22.10.2026"
+#define AMIBASH_SHORTVER "0.2"
+#define AMIBASH_DATE "23.10.2026"
 #define AMIBASH_STR2(x) #x
 #define AMIBASH_STR(x) AMIBASH_STR2(x)
 #ifdef AMIBASH_CPU

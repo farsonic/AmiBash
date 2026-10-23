@@ -1421,7 +1421,7 @@ int os_open_terminal(void)
         if (out) Close(out);
         return -1;
     }
-    sprintf(cmd, "\"%s\" --term", selfpath);
+    sprintf(cmd, "\"%s\" --term-run", selfpath);
     r = SystemTags((STRPTR)cmd, SYS_Input, in, SYS_Output, out, SYS_Asynch, TRUE,
                    NP_StackSize, 16384, TAG_END);
     if (r == -1) {

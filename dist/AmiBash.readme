@@ -2,7 +2,7 @@ Short:        Bash-compatible shell for AmigaOS (no ixemul)
 Author:       AmiBash contributors
 Uploader:     farsonic@gmail.com
 Type:         util/shell
-Version:      0.1
+Version:      0.2
 Architecture: m68k-amigaos >= 2.0.4; m68k-aros
 Distribution: Aminet
 License:      GPL-3.0-or-later
@@ -34,6 +34,11 @@ and it can be made resident.
 top shows the tasks using the CPU (each task's share, sampled 50 or
 60 times a second), and memory, in a Shell window or the AmiBash
 Terminal.
+
+amibash-update (68020+, needs AmiSSL v5 and a TCP/IP stack) checks
+GitHub for a newer AmiBash release; "amibash-update INSTALL" downloads
+it and starts its installer.  In the terminal: AmiBash > Check for
+Update (Amiga-U); AmiBash > About AmiBash shows the version.
 
 The SSH drawer has ssh and ssh-keygen from OpenSSH 10.6p1 (no OpenSSL:
 ed25519 keys, curve25519 and post-quantum key exchange, ChaCha20 and

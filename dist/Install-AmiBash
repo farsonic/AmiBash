@@ -1,4 +1,4 @@
-; $VER: Install-AmiBash 1.2 (23.10.2026)
+; $VER: Install-AmiBash 1.3 (23.10.2026)
 ;
 ; Installs AmiBash with the standard Amiga Installer (OS 3.x) or
 ; InstallerLG.  Double-click its icon, or from the Shell:
@@ -31,7 +31,9 @@
     (prompt "Which parts of AmiBash should be installed?")
     (help
       "bash and top in C: - the shell itself; it is also the terminal (bash --term, or "
-      "double-click its icon). top shows the tasks using the CPU, and memory.\n\n"
+      "double-click its icon). top shows the tasks using the CPU, and memory. "
+      "On a 68020 or better also amibash-update, which checks GitHub for a newer "
+      "AmiBash and installs it (it needs AmiSSL v5).\n\n"
       "S:bashrc - an example settings file read by every new bash.\n\n"
       "AmiBashMono fonts - sharp bitmap fonts in every size, used by the "
       "terminal on AGA/ECS screens.\n\n"
@@ -76,6 +78,9 @@
       (source (tackon #here "top"))
       (dest "C:")
       (nogauge))
+    ; checks GitHub for a newer AmiBash (AmiSSL v5, so 68020+)
+    (if #has020
+      (copyfiles (source (tackon #here "amibash-update")) (dest "C:") (nogauge)))
   ))
 
 ; ---- S:bashrc --------------------------------------------------------
