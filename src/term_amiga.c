@@ -185,6 +185,15 @@ static int pens_obtained;
 /* tab bar geometry */
 static int plus_w;
 
+/* width of each of n tabs: they share the bar, but none is wider than
+ * TABCOLS characters (a single tab no longer fills the whole bar) */
+#define TABCOLS 28
+static int tab_width(int n)
+{
+    int w = (win->GZZWidth - plus_w) / (n ? n : 1);
+    return w > TABCOLS * cw ? TABCOLS * cw : w;
+}
+
 /* scroller in the right window border */
 static int sb_lines = 300;       /* scrollback lines per tab           */
 static Object *sb_prop, *sb_up, *sb_down;
@@ -667,7 +676,7 @@ static void draw_tabbar(void)
     SetAPen(rp, dri ? dri->dri_Pens[BACKGROUNDPEN] : 0);
     RectFill(rp, 0, 0, W - 1, tabh - 1);
     if (n == 0) return;
-    w = (W - plus_w) / n;
+    w = tab_width(n);
     k = 0;
     for (i = 0; i < MAXTABS; i++) {
         Tab *t = &tabs[i];
@@ -708,17 +717,17 @@ static void draw_tabbar(void)
         if (len) txt(rp, t->title, len);
         x += w;
     }
-    /* "+" button */
+    /* "+" button, right after the last tab */
     SetAPen(rp, dri ? dri->dri_Pens[SHINEPEN] : 2);
     Move(rp, x, tabh - 1);
     Draw(rp, x, 1);
-    Draw(rp, W - 1, 1);
+    Draw(rp, x + plus_w - 1, 1);
     SetAPen(rp, dri ? dri->dri_Pens[SHADOWPEN] : 1);
-    Draw(rp, W - 1, tabh - 1);
+    Draw(rp, x + plus_w - 1, tabh - 1);
     Draw(rp, x, tabh - 1);
     SetAPen(rp, dri ? dri->dri_Pens[TEXTPEN] : 1);
     SetBPen(rp, dri ? dri->dri_Pens[BACKGROUNDPEN] : 0);
-    Move(rp, x + (W - x - cw) / 2, 3 + base);
+    Move(rp, x + (plus_w - cw) / 2, 3 + base);
     txt(rp, "+", 1);
 }
 
@@ -2171,11 +2180,11 @@ static void click(int x, int y)
     if (y >= tabh) return;
     for (i = 0; i < MAXTABS; i++)
         if (tabs[i].used && !tabs[i].hidden) n++;
-    if (x >= win->GZZWidth - plus_w || n == 0) {
+    w = tab_width(n);
+    if (n == 0 || (x >= n * w && x < n * w + plus_w)) {
         new_tab();
         return;
     }
-    w = (win->GZZWidth - plus_w) / n;
     for (i = 0; i < MAXTABS; i++) {
         if (!tabs[i].used || tabs[i].hidden) continue;
         if (x >= k * w && x < (k + 1) * w) {
@@ -2271,6 +2280,36 @@ static int find_font(const char *name)
         }
     }
     return 0;
+}
+
+/* the default window: almost the screen's width, 4/5 of its height */
+static void default_box(LONG *w, LONG *h)
+{
+    *w = scr->Width - 40;
+    *h = (scr->Height - scr->BarHeight - 1) * 4 / 5;
+}
+
+/* Preferences > Text > Window: c columns and r rows (0: the default
+ * width or height), as far as the screen allows */
+static void size_window(int c, int r)
+{
+    LONG ww, wh, l, tp;
+    default_box(&ww, &wh);
+    if (c > 0) ww = win->Width - win->GZZWidth + c * cw;
+    if (r > 0) wh = win->Height - win->GZZHeight + tabh + r * chh;
+    if (ww > scr->Width) ww = scr->Width;
+    if (wh > scr->Height - scr->BarHeight - 1) wh = scr->Height - scr->BarHeight - 1;
+    l = win->LeftEdge;
+    tp = win->TopEdge;
+    if (l + ww > scr->Width) l = scr->Width - ww;
+    if (tp + wh > scr->Height) tp = scr->Height - wh;
+    ChangeWindowBox(win, l, tp, ww, wh);
+}
+
+void term_current_size(int *c, int *r)
+{
+    *c = cols;
+    *r = rows;
 }
 
 /* after a font change: resize the window to keep the columns and rows
@@ -2631,6 +2670,7 @@ static void menu_pick(UWORD code)
 /* from the preferences window: a profile changed (colours show at once;
  * the active tab's profile's font too) */
 static char applied_font[64];
+static int applied_cols, applied_rows;
 
 static void prefs_apply(Profile *p)
 {
@@ -2649,6 +2689,11 @@ static void prefs_apply(Profile *p)
         font_resize = 1;
         choose_font();
         font_resize = 0;
+    }
+    if (win_cols != applied_cols || win_rows != applied_rows) {
+        applied_cols = win_cols;
+        applied_rows = win_rows;
+        size_window(win_cols, win_rows);          /* NEWSIZE lays it out */
     }
     draw_tabbar();
     if (t) redraw_tab(t);
@@ -2787,8 +2832,12 @@ int term_main(const char *selfpath)
         }
     }
     make_scroller();
-    W = scr->Width - 40;
-    H = (scr->Height - scr->BarHeight - 1) * 4 / 5;
+    {
+        LONG dw, dh;
+        default_box(&dw, &dh);
+        W = dw;
+        H = dh;
+    }
     win = OpenWindowTags(NULL,
                          WA_Left, 20, WA_Top, scr->BarHeight + 1,
                          WA_Width, W, WA_Height, H,
@@ -2812,6 +2861,12 @@ int term_main(const char *selfpath)
     obtain_pens(prof_default());
     if (curprof) strcpy(applied_font, curprof->font);
     choose_font();
+    applied_cols = win_cols;
+    applied_rows = win_rows;
+    if (win_cols || win_rows) {
+        layout();
+        size_window(win_cols, win_rows);
+    }
     build_menus();
     pubport = CreateMsgPort();
     if (pubport) {

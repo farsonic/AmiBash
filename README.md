@@ -179,7 +179,12 @@ text sent to the shell at start, scrollback lines and copy-on-select.
 Changes show at once; *Use* keeps them for this session, *Save* in
 `ENVARC:AmiBash/terminal.prefs`, *Cancel* puts everything back. The
 profile marked `*` is the default; *Terminal > New Tab with Profile*
-opens a tab with any other, and each tab keeps its own colours. **Fonts.** The terminal uses *AmiBashMono*, supplied in `Fonts/`: DejaVu
+opens a tab with any other, and each tab keeps its own colours. The
+*Text* page also sets the window's size in columns and rows, for all
+profiles (*Current size* takes the window's size now; 0 is the default
+size: nearly the screen's width and 4/5 of its height).
+
+**Fonts.** The terminal uses *AmiBashMono*, supplied in `Fonts/`: DejaVu
 Sans Mono drawn separately for every size from 10 to 43 pixels, using the
 font's hinting, so text is sharp at every step instead of being a scaled
 bitmap. On screens with tall pixels (non-interlaced PAL/NTSC hires) it
