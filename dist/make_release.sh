@@ -21,7 +21,7 @@ cp contrib/ssh/README.md "$R/AmiBash/SSH/ssh.readme"
 cp dist/Install-AmiBash "$R/AmiBash/"
 python3 tools/mkicon.py "$R/AmiBash/Install-AmiBash.info" Installer APPNAME=AmiBash MINUSER=AVERAGE >/dev/null
 mkdir -p "$R/AmiBash/Icons"
-python3 tools/mkicon.py "$R/AmiBash/Icons/AmiBash Terminal.info" C:bash >/dev/null
+python3 tools/mkicon.py "$R/AmiBash/Icons/Terminal.info" C:bash >/dev/null
 cp -r dist/Fonts "$R/AmiBash/"
 cp tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py tools/mkinfo.py "$R/AmiBash/tools/"
 cp dist/S/bashrc "$R/AmiBash/S/"

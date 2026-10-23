@@ -1,4 +1,4 @@
-; $VER: Install-AmiBash 1.1 (22.10.2026)
+; $VER: Install-AmiBash 1.2 (23.10.2026)
 ;
 ; Installs AmiBash with the standard Amiga Installer (OS 3.x) or
 ; InstallerLG.  Double-click its icon, or from the Shell:
@@ -136,7 +136,10 @@
     (textfile
       (dest (tackon #tools "AmiBash Terminal"))
       (append "Double-click the icon to open the AmiBash Terminal (C:bash).\n"))
-    (copyfiles (source (tackon #here "Icons/AmiBash Terminal.info")) (dest #tools) (nogauge))
+    ; with AmigaDOS Copy: copyfiles on a lone .info file fails on some
+    ; Installer versions ("Unable to locate a file or drawer")
+    (run (cat "Copy >NIL: \"" (tackon #here "Icons/Terminal.info") "\" \""
+              (tackon #tools "AmiBash Terminal.info") "\""))
   ))
 
 ; ---- ssh ----------------------------------------------------------------
