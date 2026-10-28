@@ -1443,6 +1443,23 @@ static int xword_inner(XCtx *c, const char *s, const char *end, int in_dq)
                 }
                 break;
             }
+            if (*n == '{' && n + 1 < end && (n[1] == ' ' || n[1] == '\t' || n[1] == '\n' || n[1] == '|')) {
+                /* ${ cmd; } and ${| cmd; } (bash 5.3): run in this shell */
+                const char *e = scan_skip_brace(n + 1);
+                char *cmd, *out;
+                int valsub = n[1] == '|';
+                if (!e || e > end) {
+                    bad_subst(s, (int)(end - s));
+                    return -1;
+                }
+                cmd = xstrndup(n + 1 + valsub, (e - 1) - (n + 1 + valsub));
+                out = function_subst(cmd, valsub);
+                xfree(cmd);
+                putstr(c, out, in_dq ? Q_QUOTED : Q_EXP);
+                xfree(out);
+                s = e;
+                break;
+            }
             if (*n == '{') {
                 const char *e = scan_skip_brace(n + 1);
                 if (!e || e > end) {
@@ -2050,6 +2067,56 @@ char *command_subst(const char *cmd)
         r[o] = 0;
     }
     shf_close(mem);
+    sh.laststatus = st;
+    return r;
+}
+
+/* ${ cmd; }: cmd runs in this shell, like the body of a function
+ * (local and return work); its output is the value.  ${| cmd; }: the
+ * value is that of REPLY, which is local to it; output is not taken */
+char *function_subst(const char *cmd, int valsub)
+{
+    ShFile *mem = NULL;
+    FdSave save;
+    char *r;
+    int st, save_errexit = sh.opt_errexit;
+    if (!valsub) {
+        mem = shf_mem();
+        fd_save(&save);
+        fd_assign(1, shf_ref(mem));
+    }
+    var_push_scope();
+    if (valsub) {
+        var_make_local("REPLY");
+        var_unset("REPLY");
+    }
+    sh.opt_errexit = 0;          /* as for $(...) */
+    sh.funsubdepth++;
+    st = exec_string(cmd, NULL);
+    sh.funsubdepth--;
+    sh.opt_errexit = save_errexit;
+    if (sh.flow == FLOW_RETURN) {
+        sh.flow = FLOW_NONE;
+        st = sh.exitstatus;
+    }
+    if (valsub) {
+        const char *v = var_get("REPLY");
+        r = xstrdup(v ? v : "");
+    }
+    var_pop_scope();
+    if (!valsub) {
+        long n, i, o = 0;
+        sh_flush_all();
+        fd_restore(&save);
+        n = mem->mlen;
+        while (n > 0 && mem->mem[n - 1] == '\n') n--;
+        r = xmalloc(n + 1);
+        for (i = 0; i < n; i++)
+            if (mem->mem[i]) r[o++] = mem->mem[i];
+        r[o] = 0;
+        shf_close(mem);
+    }
+    cmdsubst_status = st;
     sh.laststatus = st;
     return r;
 }

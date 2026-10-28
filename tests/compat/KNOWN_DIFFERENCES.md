@@ -1,7 +1,8 @@
 # Known differences between AmiBash and GNU bash
 
 The compatibility suite (`tests/run_compat.sh`, `make test`) runs every
-`tests/compat/*.sh` script under `/bin/bash --norc` and under
+`tests/compat/*.sh` script under the reference bash (the release in
+`UPSTREAM_BASH`, built by `tools/bash-upstream.sh`; else `/bin/bash`) and under
 `build/amibash`, and compares stdout and the exit status exactly, and
 stderr after normalising the script path / shell name prefix.
 
@@ -58,3 +59,27 @@ deliberate Amiga adaptations or cannot be done without `fork()`.
   when the function was called, not the file where it was defined.
 * `$'\u....'` produces UTF-8 on the host build but ISO-8859-1 on the
   Amiga (characters above 255 become `?`).
+
+## bash 5.3 features with Amiga limits
+
+* `GLOBSORT=atime` and `ctime` sort by the modification date, the only
+  date AmigaOS keeps; `blocks` is worked out from the size.
+* `time` and `TIMEFORMAT`: only the elapsed time is measured; user and
+  system time (`%U`, `%S`) are 0, and `%P` is 0.00.  The elapsed time has
+  1/50 s steps on the Amiga.
+* `BASH_MONOSECONDS` is the system time in seconds on the Amiga (there is
+  no separate monotonic clock).
+* `BASH_TRAPSIG` uses bash's numbers on Linux (ERR 66, DEBUG 65,
+  RETURN 67).
+* `array_expand_once` / `assoc_expand_once` can be set and shown but do
+  not change how subscripts are expanded.
+* `read -E` is `read -e`: AmiBash's line editor completes the same way
+  for both.
+
+## Older differences still open
+
+* `command declare a=(1 2)` is accepted; bash reports a syntax error.
+* `[[ a =~ ( ]]`: bash reads on for the `)`; AmiBash reports
+  "unexpected end of file".
+* A `RETURN` trap set outside a function runs when functions return
+  (bash: only with `set -T`); `DEBUG` traps do not run.

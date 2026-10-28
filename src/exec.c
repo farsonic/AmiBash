@@ -84,6 +84,15 @@ int check_interrupt(void)
     return 1;
 }
 
+/* BASH_TRAPSIG (bash 5.3) while a trap runs: the signal's number, as
+ * bash on Linux numbers them (EXIT 0, DEBUG 65, ERR 66, RETURN 67) */
+static void set_trapsig(int sig)
+{
+    char *n = str_itoa(sig == TRAP_DEBUG ? 65 : sig == TRAP_ERR ? 66 : sig == TRAP_RETURN ? 67 : sig);
+    var_set("BASH_TRAPSIG", n, 0);
+    xfree(n);
+}
+
 int run_trap(int sig)
 {
     char *act;
@@ -93,7 +102,9 @@ int run_trap(int sig)
     act = xstrdup(sh.traps[sig].action);
     sh.in_trap++;
     sh.flow = FLOW_NONE;
+    set_trapsig(sig);
     exec_string(act, "trap");
+    var_unset("BASH_TRAPSIG");
     sh.in_trap--;
     xfree(act);
     if (sh.flow == FLOW_NONE) sh.flow = save_flow;
@@ -107,7 +118,9 @@ void run_exit_trap(void)
         char *act = sh.traps[TRAP_EXIT].action;
         sh.traps[TRAP_EXIT].action = NULL;
         sh.flow = FLOW_NONE;
+        set_trapsig(TRAP_EXIT);
         exec_string(act, "trap");
+        var_unset("BASH_TRAPSIG");
         xfree(act);
     }
 }
@@ -396,6 +409,15 @@ void hash_list(int fd)
     for (h = hashtab; h; h = h->next) sh_printf(fd, "%4d\t%s\n", h->hits, h->path);
 }
 
+/* the remembered path of name, or NULL (type says "hashed") */
+const char *hash_peek(const char *name)
+{
+    HashEnt *h;
+    for (h = hashtab; h; h = h->next)
+        if (strcmp(h->name, name) == 0) return h->path;
+    return NULL;
+}
+
 static void path_dirs(StrList *out)
 {
     const char *path = var_get("PATH");
@@ -643,6 +665,11 @@ static void stack_push(const char *name, const char *val)
     Var *v = var_lookup(name);
     StrList old;
     int i;
+    char *full = NULL;
+    if (sh.sh_source_fullpath && !strcmp(name, "BASH_SOURCE") && strcmp(val, "main") && !path_is_absolute(val)) {
+        /* shopt -s bash_source_fullpath (bash 5.3) */
+        val = full = path_absolute(val);
+    }
     sl_init(&old);
     if (v && (v->flags & V_ARRAY)) var_arr_values(v, &old, 0);
     v = var_make_array(name, 0);
@@ -654,6 +681,7 @@ static void stack_push(const char *name, const char *val)
         xfree(k);
     }
     sl_free(&old);
+    xfree(full);
 }
 
 static void stack_pop(const char *name)
@@ -1450,6 +1478,8 @@ done_tmp:
 /* ------------------------------------------------------------------ */
 /* compound commands                                                    */
 
+static void print_time(long ms, int posix);
+
 static int exec_pipeline(Node *n)
 {
     int i, status = 0;
@@ -1509,12 +1539,66 @@ static int exec_pipeline(Node *n)
     xfree(st);
     if (n->u.pipe.bang) status = !status;
 timed:
-    if (n->u.pipe.timed) {
-        long ms = os_time_ms() - t0;
-        sh_printf(2, "\nreal\t%ldm%ld.%03lds\nuser\t0m0.000s\nsys\t0m0.000s\n",
-                  ms / 60000, (ms / 1000) % 60, ms % 1000);
-    }
+    if (n->u.pipe.timed) print_time(os_time_ms() - t0, n->u.pipe.timed == 2);
     return status;
+}
+
+/* "time": TIMEFORMAT's %[p][l]R, U, S, P (p up to 6 digits: bash 5.3).
+ * Only the elapsed time is known; user and system time are 0 */
+static void time_value(SBuf *b, long ms, int prec, int lng)
+{
+    long sec = ms / 1000, us = (ms % 1000) * 1000;
+    char frac[8];
+    sprintf(frac, "%06ld", us);
+    frac[prec] = 0;
+    if (lng) sb_printf(b, "%ldm%ld", sec / 60, sec % 60);
+    else sb_printf(b, "%ld", sec);
+    if (prec > 0) sb_printf(b, ".%s", frac);
+    if (lng) sb_addc(b, 's');
+}
+
+static void print_time(long ms, int posix)
+{
+    const char *f = posix ? "real %2R\nuser %2U\nsys %2S" : var_get("TIMEFORMAT");
+    SBuf b;
+    if (!f) f = "\nreal\t%3lR\nuser\t%3lU\nsys\t%3lS";
+    if (!*f) return;
+    sb_init(&b);
+    for (; *f; f++) {
+        int prec = 3, lng = 0;
+        if (*f != '%') {
+            sb_addc(&b, *f);
+            continue;
+        }
+        if (!f[1]) {
+            sb_addc(&b, '%');
+            break;
+        }
+        f++;
+        if (*f == '%') {
+            sb_addc(&b, '%');
+            continue;
+        }
+        if (isdigit((unsigned char)*f)) {
+            prec = *f++ - '0';
+            if (prec > 6) prec = 6;
+        }
+        if (*f == 'l') lng = 1, f++;
+        if (*f == 'R') time_value(&b, ms, prec, lng);
+        else if (*f == 'U' || *f == 'S') time_value(&b, 0, prec, lng);
+        else if (*f == 'P') sb_adds(&b, "0.00");
+        else {
+            char c[2];
+            c[0] = *f ? *f : '%';
+            c[1] = 0;
+            sh_error("TIMEFORMAT: `%s': invalid format character", c);
+            sb_free(&b);
+            return;
+        }
+    }
+    sb_addc(&b, '\n');
+    sh_puts(2, b.s);
+    sb_free(&b);
 }
 
 static int loop_flow(void)
@@ -1963,7 +2047,8 @@ int exec_string(const char *src, const char *name)
         if (r == PARSE_EOF) break;
         if (r != PARSE_OK) {
             /* a syntax error in eval/trap text only fails that command */
-            report_syntax_error(p, soft ? name : NULL);
+            /* bash says "-c: line N:" for the -c string, "eval: ..." too */
+            report_syntax_error(p, soft || (name && !strcmp(name, "-c")) ? name : NULL);
             status = 2;
             if (!sh.interactive && !soft) {
                 sh.flow = FLOW_EXIT;

@@ -403,6 +403,8 @@ static char *printf_quote(const char *s)
     return sb_take(&b);
 }
 
+static char *squote_word(const char *w);
+
 static int do_printf(SBuf *out, const char *fmt, char **args, int nargs, int *err, int *stop)
 {
     int ai = 0;
@@ -506,7 +508,7 @@ static int do_printf(SBuf *out, const char *fmt, char **args, int nargs, int *er
             }
             f++;
             arg = ai < nargs ? args[ai] : NULL;
-            if (strchr("sbqcdiouxXfFeEgGaA", conv)) ai++;
+            if (strchr("sbqQcdiouxXfFeEgGaA", conv)) ai++;
             switch (conv) {
             case 's':
                 fmt_str(out, flags, width, prec, arg ? arg : "");
@@ -519,10 +521,17 @@ static int do_printf(SBuf *out, const char *fmt, char **args, int nargs, int *er
                 if (st) *stop = 1;
                 break;
             }
-            case 'q': {
-                char *q = printf_quote(arg ? arg : "");
-                fmt_str(out, flags, width, prec, q);
+            case 'q':
+            case 'Q': {
+                /* %Q: the precision cuts the argument before quoting;
+                 * '#' (bash 5.3): single quotes, unless $'...' is needed */
+                const char *src = arg ? arg : "";
+                char *cut = NULL, *q;
+                if (conv == 'Q' && prec >= 0 && (int)strlen(src) > prec) src = cut = xstrndup(src, prec);
+                q = strchr(flags, '#') ? squote_word(src) : printf_quote(src);
+                fmt_str(out, flags, width, conv == 'Q' ? -1 : prec, q);
                 xfree(q);
+                xfree(cut);
                 break;
             }
             case 'c': {
@@ -552,6 +561,23 @@ static int do_printf(SBuf *out, const char *fmt, char **args, int nargs, int *er
         }
     }
     return ai;
+}
+
+/* 'word' with ' as '\'' ($'...' if it has control characters) */
+static char *squote_word(const char *w)
+{
+    SBuf b;
+    const char *p;
+    for (p = w; *p; p++)
+        if ((unsigned char)*p < 32 || *p == 127) return printf_quote(w);
+    sb_init(&b);
+    sb_addc(&b, '\'');
+    for (p = w; *p; p++) {
+        if (*p == '\'') sb_adds(&b, "'\\''");
+        else sb_addc(&b, *p);
+    }
+    sb_addc(&b, '\'');
+    return sb_take(&b);
 }
 
 static int bi_printf(int argc, char **argv)
@@ -625,10 +651,11 @@ static int bi_read(int argc, char **argv)
     ShFile *f;
     int status = 0, got = 0;
     sh_getopt_init(&g, "read");
-    while ((c = sh_getopt(&g, argc, argv, "ersa:d:n:N:p:t:u:i:")) != -1) {
+    while ((c = sh_getopt(&g, argc, argv, "Eersa:d:n:N:p:t:u:i:")) != -1) {
         switch (c) {
         case 'r': raw = 1; break;
         case 's': silent = 1; break;
+        case 'E':                           /* bash 5.3: with completion; ours has it */
         case 'e': edit = 1; break;
         case 'a': arrname = g.arg; break;
         case 'd': delim = g.arg[0] ? (unsigned char)g.arg[0] : 0; break;
@@ -643,7 +670,7 @@ static int bi_read(int argc, char **argv)
         case 'u': fd = atoi(g.arg); break;
         case 'i': break;
         default:
-            sh_puts(2, "read: usage: read [-ers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n");
+            sh_puts(2, "read: usage: read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n");
             return 2;
         }
     }
@@ -1361,7 +1388,10 @@ typedef struct ShoptDef { const char *name; int off; } ShoptDef;
 
 static ShoptDef shopts[] = {
     {"amigapaths", SHOFF(sh_pathconv)},
+    {"array_expand_once", SHOFF(sh_array_expand_once)},
+    {"assoc_expand_once", SHOFF(sh_array_expand_once)},
     {"autocd", SHOFF(sh_autocd)},
+    {"bash_source_fullpath", SHOFF(sh_source_fullpath)},
     {"cdspell", SHOFF(sh_cdspell)},
     {"checkwinsize", SHOFF(sh_checkwinsize)},
     {"cmdhist", SHOFF(sh_cmdhist)},
@@ -1451,7 +1481,7 @@ static int bi_shopt(int argc, char **argv)
             int on = shopts[k].off ? *SHOPT(shopts[k].off) : 1;
             if (mode && (mode > 0) != on) continue;
             if (print) sh_printf(1, "shopt %s %s\n", on ? "-s" : "-u", shopts[k].name);
-            else sh_printf(1, "%-15s\t%s\n", shopts[k].name, on ? "on" : "off");
+            else sh_printf(1, "%-20s\t%s\n", shopts[k].name, on ? "on" : "off");
         }
         return 0;
     }
@@ -1470,7 +1500,7 @@ static int bi_shopt(int argc, char **argv)
             int on = shopts[k].off ? *SHOPT(shopts[k].off) : 1;
             if (!quiet) {
                 if (print) sh_printf(1, "shopt %s %s\n", on ? "-s" : "-u", shopts[k].name);
-                else sh_printf(1, "%-15s\t%s\n", shopts[k].name, on ? "on" : "off");
+                else sh_printf(1, "%-20s\t%s\n", shopts[k].name, on ? "on" : "off");
             }
             if (!on) status = 1;
         }
@@ -1498,7 +1528,7 @@ static int bi_return(int argc, char **argv)
 {
     ShInt n = sh.laststatus;
     /* the script being run is itself at sourcedepth 1 */
-    if (sh.funcdepth == 0 && sh.sourcedepth <= (sh.interactive ? 0 : 1)) {
+    if (sh.funcdepth == 0 && sh.funsubdepth == 0 && sh.sourcedepth <= (sh.interactive ? 0 : 1)) {
         sh_cmd_error("return", "can only `return' from a function or sourced script");
         return 2;
     }
@@ -1571,15 +1601,76 @@ static int bi_eval(int argc, char **argv)
     return r;
 }
 
+/* source -p DIRS: name in one of DIRS (':'-separated; empty: the
+ * current directory), or NULL */
+static char *source_search(const char *dirs, const char *name)
+{
+    const char *s = dirs, *e;
+    char sep = ':';
+#ifdef AMIGA
+    /* Amiga paths have ':' in them: ';' separates if there is one, and
+     * ':' only between Unix-style paths ("/Work/s:/S"), as for PATH */
+    if (strchr(dirs, ';')) sep = ';';
+    else {
+        const char *q;
+        for (q = dirs; *q; q++)
+            if (*q == ':' && q[1] && q[1] != '/' && q[1] != '.') sep = 0;   /* "Work:s" */
+        if (*dirs && *dirs != '/' && *dirs != '.' && strchr(dirs, ':')) sep = 0;
+    }
+#endif
+    for (;; s = e + 1) {
+        char *dir, *cand;
+        e = sep ? strchr(s, sep) : NULL;
+        if (!e) e = s + strlen(s);
+        dir = e == s ? xstrdup(".") : xstrndup(s, (int)(e - s));
+        cand = path_join(dir, name);
+        xfree(dir);
+        if (sh_exists(cand)) return cand;
+        xfree(cand);
+        if (!*e) return NULL;
+    }
+}
+
 static int bi_source(int argc, char **argv)
 {
     char *path = NULL;
-    int r;
-    if (argc < 2) {
-        sh_cmd_error(argv[0], "filename argument required");
+    const char *dirs = NULL;
+    int r, i = 1;
+    const char *cmd = argv[0];
+    /* source [-p path] filename [arguments] (bash 5.3) */
+    while (i < argc && argv[i][0] == '-' && argv[i][1]) {
+        if (!strcmp(argv[i], "--")) {
+            i++;
+            break;
+        }
+        if (argv[i][1] == 'p') {
+            if (argv[i][2]) dirs = argv[i] + 2;
+            else if (i + 1 < argc) dirs = argv[++i];
+            else {
+                sh_cmd_error(cmd, "-p: option requires an argument");
+                sh_printf(2, "%s: usage: %s [-p path] filename [arguments]\n", cmd, cmd);
+                return 2;
+            }
+            i++;
+            continue;
+        }
+        sh_cmd_error(cmd, "%s: invalid option", argv[i]);
+        sh_printf(2, "%s: usage: %s [-p path] filename [arguments]\n", cmd, cmd);
         return 2;
     }
-    if (!path_has_dir(argv[1])) {
+    argv += i - 1;
+    argc -= i - 1;
+    if (argc < 2) {
+        sh_cmd_error(cmd, "filename argument required");
+        if (dirs) sh_printf(2, "%s: usage: %s [-p path] filename [arguments]\n", cmd, cmd);
+        return 2;
+    }
+    if (dirs && !path_has_dir(argv[1])) {
+        if (!(path = source_search(dirs, argv[1]))) {
+            sh_cmd_error(cmd, "%s: file not found", argv[1]);
+            return 1;
+        }
+    } else if (!path_has_dir(argv[1])) {
         /* bash searches PATH for source files, then cwd */
         const char *pv = var_get("PATH");
         (void)pv;
@@ -1592,7 +1683,7 @@ static int bi_source(int argc, char **argv)
         path = xstrdup(argv[1]);
     }
     if (!path || !sh_exists(path)) {
-        sh_cmd_error(argv[0], "%s: No such file or directory", argv[1]);
+        sh_error("%s: No such file or directory", argv[1]);     /* bash: no "source:" */
         xfree(path);
         return 1;
     }
@@ -1703,6 +1794,8 @@ static int is_keyword(const char *w)
 }
 
 /* describe a command; mode: 0 type, 1 type -t, 2 command -v, 3 command -V, 4 type -p/-P */
+static int type_bigp;           /* type -P (not -p) */
+
 static int describe(const char *name, int mode, int all)
 {
     int found = 0;
@@ -1747,7 +1840,14 @@ static int describe(const char *name, int mode, int all)
     {
         StrList paths;
         int k;
+        const char *hp = path_has_dir(name) ? NULL : hash_peek(name);
         sl_init(&paths);
+        if (hp && !all && (mode == 0 || mode == 3)) {
+            /* like bash: a hashed command is reported as such */
+            sh_printf(1, "%s is hashed (%s)\n", name, hp);
+            return 0;
+        }
+        if (hp && all && mode == 4 && type_bigp) sl_adddup(&paths, hp);   /* bash 5.3: type -a -P */
         find_command_all(name, &paths);
         for (k = 0; k < paths.n && (k == 0 || all); k++) {
             const char *p = paths.v[k];
@@ -1765,12 +1865,13 @@ static int describe(const char *name, int mode, int all)
 static int bi_type(int argc, char **argv)
 {
     int i = 1, mode = 0, all = 0, status = 0;
+    type_bigp = 0;
     for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
         const char *p;
         for (p = argv[i] + 1; *p; p++) {
             if (*p == 't') mode = 1;
             else if (*p == 'a') all = 1;
-            else if (*p == 'p' || *p == 'P') mode = 4;
+            else if (*p == 'p' || *p == 'P') mode = 4, type_bigp |= *p == 'P';
             else if (*p == 'f') ;
             else {
                 sh_cmd_error("type", "-%c: invalid option", *p);
@@ -2059,9 +2160,37 @@ static int bi_trap(int argc, char **argv)
         sh_putc(1, '\n');
         return 0;
     }
+    if (argc > 1 && (!strcmp(argv[1], "-P") || !strcmp(argv[1], "-Pp") || !strcmp(argv[1], "-pP"))) {
+        /* -P SIG... (bash 5.3): just the action of each */
+        int st = 0;
+        if (argv[1][2]) {
+            sh_cmd_error("trap", "cannot specify both -p and -P");
+            return 2;
+        }
+        i = 2;
+        if (i < argc && !strcmp(argv[i], "--")) i++;
+        if (i >= argc) {
+            sh_cmd_error("trap", "-P requires at least one signal name");
+            return 2;
+        }
+        for (; i < argc; i++) {
+            /* (through NEARP: the resident build may not take the
+             * arrays' addresses itself) */
+            Trap *tr = (Trap *)NEARP(sh.traps), *pt = (Trap *)NEARP(sh.ptraps);
+            k = sig_number(argv[i]);
+            if (k < 0) {
+                sh_cmd_error("trap", "%s: invalid signal specification", argv[i]);
+                st = 1;
+                continue;
+            }
+            if (tr[k].action || pt[k].action) sh_printf(1, "%s\n", tr[k].action ? tr[k].action : pt[k].action);
+        }
+        return st;
+    }
     if (argc > 1 && strcmp(argv[1], "-p") == 0) i++;
     if (argc - i == 0 || i == 2) {
         int only = i == 2 && argc > 2;
+        Trap *tr = (Trap *)NEARP(sh.traps), *pt = (Trap *)NEARP(sh.ptraps);   /* resident build */
         for (k = 0; k < NSIGS; k++) {
             if (only) {
                 int j, want = 0;
@@ -2069,8 +2198,8 @@ static int bi_trap(int argc, char **argv)
                     if (sig_number(argv[j]) == k) want = 1;
                 if (!want) continue;
             }
-            if (sh.traps[k].action || sh.ptraps[k].action) {
-                char *q = shell_quote(sh.traps[k].action ? sh.traps[k].action : sh.ptraps[k].action);
+            if (tr[k].action || pt[k].action) {
+                char *q = shell_quote(tr[k].action ? tr[k].action : pt[k].action);
                 int plain = k == TRAP_EXIT || k == TRAP_ERR || k == TRAP_DEBUG || k == TRAP_RETURN;
                 sh_printf(1, "trap -- %s %s%s\n", q, plain ? "" : "SIG", signames[k]);
                 xfree(q);
@@ -2439,14 +2568,24 @@ static int bi_compgen(int argc, char **argv)
     int i = 1;
     const char *word = "";
     int mode = 0;   /* 1 cmds 2 files 3 vars 4 funcs 5 aliases 6 builtins 7 dirs, 8 wordlist */
-    const char *wl = NULL;
+    const char *wl = NULL, *into = NULL;
     StrList out;
     for (; i < argc && argv[i][0] == '-'; i++) {
         if (strcmp(argv[i], "--") == 0) {
             i++;
             break;
         }
-        if (strcmp(argv[i], "-c") == 0) mode = 1;
+        if (strcmp(argv[i], "-V") == 0) {
+            /* -V name (bash 5.3): the matches into array name */
+            if (i + 1 >= argc) {
+                sh_cmd_error("compgen", "-V: option requires an argument");
+                sh_printf(2, "compgen: usage: compgen [-V varname] [-abcdefgjksuv] [-o option] [-A action] [-G "
+                             "globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S "
+                             "suffix] [word]\n");
+                return 2;
+            }
+            into = argv[++i];
+        } else if (strcmp(argv[i], "-c") == 0) mode = 1;
         else if (strcmp(argv[i], "-k") == 0) mode = 9;
         else if (strcmp(argv[i], "-f") == 0) mode = 2;
         else if (strcmp(argv[i], "-v") == 0) mode = 3;
@@ -2529,7 +2668,21 @@ static int bi_compgen(int argc, char **argv)
         xfree(line);
     }
     }
-    {
+    if (into) {
+        int k, m = 0;
+        Var *v = var_make_array(into, 0);
+        if (!v) {
+            sl_free(&out);
+            return 1;
+        }
+        var_arr_clear(v);
+        for (k = 0; k < out.n; k++)
+            if (*out.v[k]) {
+                char *ks = str_itoa(m++);
+                var_arr_set(into, ks, out.v[k]);
+                xfree(ks);
+            }
+    } else {
         int k;
         for (k = 0; k < out.n; k++)
             if (*out.v[k]) sh_printf(1, "%s\n", out.v[k]);
@@ -2735,7 +2888,7 @@ const Builtin shell_builtins[] = {
     {"caller", bi_caller, 0, "caller [expr]"},
     {"cd", bi_cd, 0, "cd [dir]  - change directory (DH0:dir, /dh0/dir, .., ~, -)"},
     {"command", bi_command, 0, "command [-pVv] command [arg ...]"},
-    {"compgen", bi_compgen, 0, "compgen [-abcdfv] [-A action] [-W wordlist] [word]"},
+    {"compgen", bi_compgen, 0, "compgen [-V varname] [-abcdfv] [-A action] [-W wordlist] [word]"},
     {"complete", bi_complete, 0, "complete ...  - accepted, ignored"},
     {"continue", bi_continue, BI_SPECIAL, "continue [n]"},
     {"declare", bi_declare, 0, "declare [-aAfFgilnrtux] [-p] [name[=value] ...]"},
@@ -2763,7 +2916,7 @@ const Builtin shell_builtins[] = {
     {"printf", bi_printf, 0, "printf [-v var] format [arguments]"},
     {"pushd", bi_pushd, 0, "pushd [dir]"},
     {"pwd", bi_pwd, 0, "pwd [-LP]"},
-    {"read", bi_read, 0, "read [-ers] [-a array] [-d delim] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]"},
+    {"read", bi_read, 0, "read [-Eers] [-a array] [-d delim] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]"},
     {"readarray", bi_mapfile, 0, "readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [array]"},
     {"readonly", bi_readonly, BI_SPECIAL, "readonly [-aAf] [name[=value] ...] or readonly -p"},
     {"return", bi_return, BI_SPECIAL, "return [n]"},

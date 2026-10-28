@@ -51,6 +51,10 @@ struct Parser {
     int subscript_ok;          /* assignment position: name[a b]=v     */
     int final;                 /* source is complete (file, eval): a
                                   here-document may end at EOF         */
+    const char *open_kw;       /* the innermost compound command being
+                                  read ("if", "{", "(" ...) and its line,
+                                  for "unexpected end of file from ..." */
+    int open_line;
 };
 
 static Node *parse_list(Parser *p, int multiline);
@@ -68,7 +72,11 @@ static void incomplete(Parser *p)
 {
     int n = (int)strlen(p->src);
     p->incomplete = 1;
-    strcpy(p->err, "syntax error: unexpected end of file");
+    if (p->open_kw)
+        sprintf(p->err, "syntax error: unexpected end of file from `%s' command on line %d", p->open_kw,
+                p->open_line);
+    else
+        strcpy(p->err, "syntax error: unexpected end of file");
     p->errline[0] = 0;
     p->errlineno = line_at(p, n) + (n > 0 && p->src[n - 1] != '\n');
     longjmp(p->jb, 1);
@@ -162,10 +170,71 @@ static const char *skip_backtick(const char *s)
     return *s ? s + 1 : NULL;
 }
 
+static int delim_char(int c)
+{
+    return c == 0 || c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '(' ||
+           c == ')' || c == '<' || c == '>';
+}
+
+/* s after "${" of "${ cmd; }" or "${| cmd; }" (bash 5.3): the '}' that ends
+ * it is a word of its own where a command may start (after ';', a
+ * newline, '&', ...); returns after it */
+static const char *skip_funsub(const char *s)
+{
+    static const char *const kw[] = {"then", "do", "else", "elif", "if", "while", "until", "!", "time", NULL};
+    int depth = 1, cmdpos = 1;
+    if (*s == '|') s++;
+    while (*s) {
+        if (*s == ' ' || *s == '\t') {
+            s++;
+            continue;
+        }
+        if (*s == ';' || *s == '\n' || *s == '&' || *s == '|' || *s == '(' || *s == ')') {
+            cmdpos = *s != ')' || cmdpos;
+            s++;
+            continue;
+        }
+        if (*s == '#' && cmdpos) {
+            while (*s && *s != '\n') s++;
+            continue;
+        }
+        if (cmdpos && (*s == '}' || (*s == '{' && delim_char((unsigned char)s[1])))) {
+            if (*s == '}' && --depth == 0) return s + 1;
+            if (*s == '{') depth++;
+            s++;
+            continue;
+        }
+        {
+            /* a word: through quotes and expansions */
+            const char *w = s;
+            int k;
+            while (*s && !delim_char((unsigned char)*s)) {
+                if (*s == '\\') {
+                    s += s[1] ? 2 : 1;
+                } else if (*s == '\'') {
+                    if (!(s = skip_squote(s + 1))) return NULL;
+                } else if (*s == '"') {
+                    if (!(s = skip_dquote(s + 1))) return NULL;
+                } else if (*s == '`') {
+                    if (!(s = skip_backtick(s + 1))) return NULL;
+                } else if (*s == '$') {
+                    if (!(s = skip_dollar(s))) return NULL;
+                } else
+                    s++;
+            }
+            cmdpos = 0;
+            for (k = 0; kw[k]; k++)
+                if ((int)strlen(kw[k]) == (int)(s - w) && !strncmp(w, kw[k], s - w)) cmdpos = 1;
+        }
+    }
+    return NULL;
+}
+
 /* s after "${"; returns after matching '}' */
 static const char *skip_brace(const char *s)
 {
     int depth = 1;
+    if (*s == ' ' || *s == '\t' || *s == '\n' || *s == '|') return skip_funsub(s);
     while (*s) {
         switch (*s) {
         case '\\':
@@ -1367,16 +1436,42 @@ static Node *parse_simple(Parser *p)
         }
     }
     if (!n->u.simple.words && !n->u.simple.assigns && !n->redirs) syntax_error(p, peek(p));
-    /* like bash, $LINENO of a simple command is the line it ends on */
-    if (last_end > 0) n->lineno = line_at(p, last_end - 1);
+    /* like bash 5.3, $LINENO of a simple command is the line it starts on
+     * (new_node() took it), but the line it ends on for assignments only */
+    if (last_end > 0 && !n->u.simple.words) n->lineno = line_at(p, last_end - 1);
     return n;
 }
 
+static Node *parse_compound(Parser *p, int guard);
+
+/* a command; for compound ones the parser notes which is open, for the
+ * message if the input ends inside it (as bash 5.3) */
 static Node *parse_command(Parser *p)
+{
+    static const char *const kws[] = {"if", "while", "until", "for", "select", "case", "{", NULL};
+    const char *save_kw = p->open_kw, *kw = NULL;
+    int save_line = p->open_line, k;
+    Tok *t = peek(p);
+    Node *n;
+    if (t->type == T_WORD) {
+        for (k = 0; kws[k]; k++)
+            if (!strcmp(t->text, kws[k])) kw = kws[k];
+    } else if (t->type == T_LPAREN && p->src[t->start + 1] != '(')
+        kw = "(";
+    if (kw) {
+        p->open_kw = kw;
+        p->open_line = line_at(p, t->start);
+    }
+    n = parse_compound(p, 0);
+    p->open_kw = save_kw;
+    p->open_line = save_line;
+    return n;
+}
+
+static Node *parse_compound(Parser *p, int guard)
 {
     Tok *t;
     Node *n;
-    int guard = 0;
 again:
     t = peek(p);
     if (t->type == T_WORD) {
@@ -1452,7 +1547,10 @@ static Node *parse_pipeline(Parser *p)
         if (peek_word(p, "!")) bang = !bang;
         else timed = 1;
         consume(p);
-        if (timed && peek_word(p, "-p")) consume(p);
+        if (timed && peek_word(p, "-p")) {
+            consume(p);
+            timed = 2;                 /* POSIX output format */
+        }
     }
     if (timed && !starts_command(p)) {
         /* bare "time" */
@@ -1768,6 +1866,7 @@ static int has_heredoc(Node *n)
 /* term: also terminate the last command with ';' (bodies of if, while,
  * for: the way bash prints them) */
 static void print_list(Node *n, SBuf *b, int ind, int term);
+static int hd_after;             /* the last command printed had a here-document */
 
 static void print_cond(CondNode *c, SBuf *b)
 {
@@ -1823,7 +1922,7 @@ static void print_cmd(Node *n, SBuf *b, int ind)
     }
     case N_PIPE: {
         int i;
-        if (n->u.pipe.timed) sb_adds(b, "time ");
+        if (n->u.pipe.timed) sb_adds(b, n->u.pipe.timed == 2 ? "time -p " : "time ");
         if (n->u.pipe.bang) sb_adds(b, "! ");
         for (i = 0; i < n->u.pipe.n; i++) {
             if (i) sb_adds(b, " | ");
@@ -1976,7 +2075,13 @@ static void print_list(Node *n, SBuf *b, int ind, int term)
         return;
     }
     print_cmd(n, b, ind);
-    if (term && !has_heredoc(n)) sb_addc(b, ';');
+    {
+        /* as bash: a command with a here-document ends its line, and the
+         * command after it gets no ';' either (bash 5.3: also "! cmd") */
+        int after = hd_after;
+        hd_after = has_heredoc(n);
+        if (term && !hd_after && !after) sb_addc(b, ';');
+    }
 }
 
 void node_to_text(Node *n, SBuf *b, int ind)

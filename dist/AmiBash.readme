@@ -51,7 +51,7 @@ on a server.  "ssh user@host" in the AmiBash Terminal gives a remote
 shell (TERM=xterm-256color: colours, Vim, less and the cursor keys
 work); keys and known hosts live in $HOME/.ssh (SYS:.ssh by default).
 
-Its behaviour is checked against GNU bash 5.2 with a test corpus, and it
+Its behaviour is checked against GNU bash 5.3 with a test corpus, and it
 runs on 68000 with 1 MB (bash) or 68020+ (bash020).
 
 Install:  double-click Install-AmiBash (Amiga Installer), or by hand:

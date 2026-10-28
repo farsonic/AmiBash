@@ -106,6 +106,7 @@ extern int os_break_flag;                   /* set by os_check_break   */
 void  os_sleep_ms(long ms);
 long  os_time(void);                        /* unix epoch seconds      */
 long  os_time_ms(void);                     /* monotonic-ish ms        */
+long  os_monoseconds(void);                 /* BASH_MONOSECONDS        */
 long  os_tz_offset(void);                   /* local - UTC, seconds    */
 long  os_pid(void);
 const char *os_tmpdir(void);

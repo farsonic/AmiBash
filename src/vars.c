@@ -265,6 +265,8 @@ static const char *special_value(Var *v)
         s = str_itoa(sh.lineno);
     } else if (strcmp(v->name, "EPOCHSECONDS") == 0) {
         s = str_itoa(os_time());
+    } else if (strcmp(v->name, "BASH_MONOSECONDS") == 0) {
+        s = str_itoa(os_monoseconds());
     } else if (strcmp(v->name, "BASHPID") == 0) {
         s = str_itoa(sh.pid);
     } else if (strcmp(v->name, "BASH_SUBSHELL") == 0) {
@@ -1091,7 +1093,7 @@ void vars_init(void)
 {
     static const char *const specials[] = {
         "RANDOM", "SRANDOM", "SECONDS", "LINENO", "EPOCHSECONDS", "BASHPID",
-        "BASHOPTS", "SHELLOPTS", "BASH_SUBSHELL", NULL
+        "BASHOPTS", "SHELLOPTS", "BASH_SUBSHELL", "BASH_MONOSECONDS", NULL
     };
     int i;
     char *s;
@@ -1113,10 +1115,21 @@ void vars_init(void)
     var_set("BASH_VERSION", AMIBASH_VERSION, 0);
     var_set("AMIBASH_VERSION", AMIBASH_SHORTVER " (" AMIBASH_BUILD " build)", 0);
     var_make_array("BASH_VERSINFO", 0);
-    var_arr_set("BASH_VERSINFO", "0", "5");
-    var_arr_set("BASH_VERSINFO", "1", "2");
-    var_arr_set("BASH_VERSINFO", "2", "0");
-    var_arr_set("BASH_VERSINFO", "3", "1");
+    {
+        /* "5.3.20(1)-amiga": major, minor, patch level, build */
+        const char *p = AMIBASH_VERSION;
+        int k;
+        for (k = 0; k < 4; k++) {
+            char num[12], key[2];
+            int n = 0;
+            while (*p >= '0' && *p <= '9' && n < 11) num[n++] = *p++;
+            num[n] = 0;
+            key[0] = (char)('0' + k);
+            key[1] = 0;
+            var_arr_set("BASH_VERSINFO", key, n ? num : "0");
+            if (*p) p++;
+        }
+    }
     var_arr_set("BASH_VERSINFO", "4", "release");
 #ifdef AMIGA
     var_arr_set("BASH_VERSINFO", "5", "m68k-amiga-amigaos");
@@ -1129,6 +1142,10 @@ void vars_init(void)
     var_set("MACHTYPE", "x86_64-pc-linux-gnu", 0);
     var_set("HOSTTYPE", "x86_64", 0);
 #endif
+    {
+        Var *bv = var_lookup("BASH_VERSINFO");
+        if (bv) bv->flags |= V_READONLY;      /* as in bash */
+    }
     var_set("IFS", " \t\n", 0);
     var_set("PS2", "> ", 0);
     var_set("PS4", "+ ", 0);

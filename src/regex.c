@@ -370,6 +370,8 @@ static int parse_bracket(RxParser *P)
     int neg = 0, first = 1, t, t2, c1, c2, i;
 
     memset(set, 0, sizeof set);
+    if (!*p)
+        return seterr(P, E_BADPAT);     /* "[" at the end: as glibc */
     if (*p == '^') {
         neg = 1;
         p++;

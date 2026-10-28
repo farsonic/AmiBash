@@ -5,6 +5,7 @@
 #   make pure       resident ("pure") 68000 build  -> build/bash.pure
 #   make pure020    resident 68020 build           -> build/bash020.pure
 #   make test       run the comparison suite against GNU bash
+#   make upstream   follow GNU bash: newest release, what changed, tests
 
 SRCS = util.c io.c path.c parse.c pattern.c expand.c arith.c vars.c exec.c \
        test.c builtins.c lineedit.c main.c selftest.c regex.c timeutil.c \
@@ -54,6 +55,10 @@ build/bash020.pure: $(addprefix src/,$(PURESRCS)) src/sh.h src/os.h
 test: build/amibash
 	tests/run_compat.sh
 
+# the newest GNU bash: build it, show what changed, run the tests against it
+upstream: build/amibash
+	tools/bash-upstream.sh
+
 clean:
 	rm -rf build
-.PHONY: all amiga amiga020 test clean
+.PHONY: all amiga amiga020 test upstream clean

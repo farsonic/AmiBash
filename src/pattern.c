@@ -1,6 +1,7 @@
 /*
  * pattern.c - shell pattern matching and pathname expansion.
  */
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include "sh.h"
@@ -382,6 +383,76 @@ static void glob_rec(const char *base, const char *rest, StrList *out, int flags
     xfree(comp);
 }
 
+/* GLOBSORT (bash 5.3): [+|-]name|numeric|size|mtime|atime|ctime|blocks|nosort.
+ * AmigaOS keeps one date per file, so atime and ctime are its mtime, and
+ * blocks come from the size */
+typedef struct GsEnt { char *name; double key; } GsEnt;
+static int gs_key, gs_rev;       /* 0 name, 1 numeric, 2 by key        */
+
+static int gs_alldigits(const char *s)
+{
+    if (!*s) return 0;
+    for (; *s; s++)
+        if (!isdigit((unsigned char)*s)) return 0;
+    return 1;
+}
+
+static int gs_cmp(const void *a, const void *b)
+{
+    const GsEnt *x = a, *y = b;
+    int r = 0;
+    if (gs_key == 1) {
+        int dx = gs_alldigits(x->name), dy = gs_alldigits(y->name);
+        if (dx != dy) r = dx ? -1 : 1;              /* the all-digit names first */
+        else if (dx) {
+            const char *p = x->name, *q = y->name;
+            while (*p == '0' && p[1]) p++;
+            while (*q == '0' && q[1]) q++;
+            r = strlen(p) != strlen(q) ? (strlen(p) < strlen(q) ? -1 : 1) : strcmp(p, q);
+        }
+    } else if (gs_key == 2 && x->key != y->key)
+        r = x->key < y->key ? -1 : 1;
+    if (!r) r = strcmp(x->name, y->name);
+    return gs_rev ? -r : r;
+}
+
+/* sort glob results as GLOBSORT says; 0: leave them unsorted */
+static int glob_sort(StrList *res)
+{
+    const char *g = var_get("GLOBSORT"), *k;
+    GsEnt *e;
+    int i, what = 0;           /* 0 name 1 numeric 2 size 3 mtime 4 blocks */
+    gs_rev = 0;
+    if (!g || !*g) {
+        sl_sort(res, 0);         /* bash (C locale) sorts by byte value */
+        return 1;
+    }
+    k = g;
+    if (*k == '+') k++;
+    else if (*k == '-') k++, gs_rev = 1;
+    if (!strcmp(k, "nosort")) return 0;
+    if (!*k || !strcmp(k, "name")) what = 0;
+    else if (!strcmp(k, "numeric")) what = 1;
+    else if (!strcmp(k, "size")) what = 2;
+    else if (!strcmp(k, "mtime") || !strcmp(k, "atime") || !strcmp(k, "ctime")) what = 3;
+    else if (!strcmp(k, "blocks")) what = 4;
+    else gs_rev = 0;             /* invalid: the usual order */
+    if (res->n < 2) return 1;
+    e = xmalloc(res->n * sizeof(GsEnt));
+    for (i = 0; i < res->n; i++) {
+        OsDirEnt st;
+        e[i].name = res->v[i];
+        e[i].key = 0;
+        if (what >= 2 && os_stat(res->v[i], &st) == 0)
+            e[i].key = what == 3 ? (double)st.mtime : what == 4 ? (double)(long)((st.size + 511) / 512) : st.size;
+    }
+    gs_key = what == 0 ? 0 : what == 1 ? 1 : 2;
+    qsort(e, res->n, sizeof(GsEnt), gs_cmp);
+    for (i = 0; i < res->n; i++) res->v[i] = e[i].name;
+    xfree(e);
+    return 1;
+}
+
 int glob_expand(const char *pat, StrList *out, int flags)
 {
     StrList res;
@@ -392,7 +463,7 @@ int glob_expand(const char *pat, StrList *out, int flags)
     if (sh.sh_dotglob) flags |= PM_DOTGLOB;
     glob_rec(base, pat + rl, &res, flags);
     xfree(base);
-    sl_sort(&res, 0);         /* bash (C locale) sorts by byte value */
+    glob_sort(&res);
     for (i = 0; i < res.n; i++) {
         sl_add(out, res.v[i]);
         res.v[i] = NULL;

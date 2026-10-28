@@ -1079,7 +1079,10 @@ int util_chmod(int argc, char **argv)
 {
     int i, rec = 0, verbose = 0, quiet = 0, rc = 0, nfiles = 0, dd = 0;
     const char *mode = NULL;
+    char **files;
     u_break_reset();
+    /* the files, apart (argv belongs to the caller, which frees it) */
+    files = xmalloc((argc + 1) * sizeof(char *));
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!dd && strcmp(a, "--") == 0) {
@@ -1092,9 +1095,11 @@ int util_chmod(int argc, char **argv)
             else if (strcmp(a, "--silent") == 0 || strcmp(a, "--quiet") == 0) quiet = 1;
             else if (strcmp(a, "--help") == 0) {
                 sh_printf(1, "Usage: chmod [-Rv] (+-=)[hsparwed] | [ugoa][+-=][rwx] | OCTAL FILE...\n");
+                xfree(files);
                 return 0;
             } else {
                 sh_cmd_error(argv[0], "unrecognized option '%s'", a);
+                xfree(files);
                 return 1;
             }
             continue;
@@ -1106,24 +1111,24 @@ int util_chmod(int argc, char **argv)
             continue;
         }
         if (!mode) mode = a;
-        else argv[++nfiles] = argv[i];   /* compact file list in place */
+        else files[nfiles++] = argv[i];
     }
-    if (!mode) {
-        sh_cmd_error(argv[0], "missing operand");
-        return 1;
-    }
-    if (nfiles == 0) {
-        sh_cmd_error(argv[0], "missing operand after '%s'", mode);
+    if (!mode || nfiles == 0) {
+        if (!mode) sh_cmd_error(argv[0], "missing operand");
+        else sh_cmd_error(argv[0], "missing operand after '%s'", mode);
+        xfree(files);
         return 1;
     }
     {
         unsigned long dummy;
         if (chmod_apply(mode, 0, &dummy) != 0) {
             sh_cmd_error(argv[0], "invalid mode: '%s'", mode);
+            xfree(files);
             return 1;
         }
     }
-    for (i = 1; i <= nfiles; i++) rc |= chmod_path(argv[0], argv[i], mode, rec, verbose, quiet);
+    for (i = 0; i < nfiles; i++) rc |= chmod_path(argv[0], files[i], mode, rec, verbose, quiet);
+    xfree(files);
     return rc ? 1 : 0;
 }
 

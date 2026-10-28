@@ -215,6 +215,20 @@ gives the Amiga a `bsdsocket.library` that uses the host's network (the
 RTG config `emu/arosrtg.fs-uae` has it), so a test `sshd` on the host is
 reachable at 127.0.0.1.
 
+## 8. The reference GNU bash
+
+The test corpus compares AmiBash with the GNU bash release it follows
+(`UPSTREAM_BASH`). `make upstream` downloads that release and its official
+patches from ftp.gnu.org, checks their signatures with `gpgv` against the
+GNU keyring, and builds it in `toolchain/bash-ref` (beside the repository):
+
+```
+sudo apt install gpgv build-essential bison    # gpgv, a C compiler, make
+make upstream
+```
+
+`tests/run_compat.sh` then uses `toolchain/bash-ref/bash` by default.
+
 ## In a cloud session
 
 * The container is reset when the session ends, so everything above has to

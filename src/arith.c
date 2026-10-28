@@ -178,7 +178,7 @@ static ShInt var_value(AState *a, const char *name, const char *sub)
         if (setjmp(sub_a.jb)) longjmp(a->jb, 1);
         v = a_comma(&sub_a);
         skipws(&sub_a);
-        if (*sub_a.p) a_error(&sub_a, "syntax error in expression");
+        if (*sub_a.p) a_error(&sub_a, "arithmetic syntax error in expression");
     }
     return v;
 }
@@ -236,7 +236,7 @@ static int read_lvalue(AState *a, char *name, int nsz, char **sub)
             else if (*q == ']') depth--;
             if (depth) q++;
         }
-        if (!*q) a_error(a, "missing `]'");
+        if (!*q) a_error(a, "bad array subscript");
         *sub = xstrndup(p + 1, q - p - 1);
         p = q + 1;
     }
@@ -271,7 +271,7 @@ static ShInt a_primary(AState *a)
                 else sh_error("%s: value too great for base (error token is \"%s\")", num, num);
                 longjmp(a->jb, 1);
             }
-            a_error(a, "syntax error: invalid arithmetic operator");
+            a_error(a, "arithmetic syntax error: invalid arithmetic operator");
         }
         return v;
     }
@@ -292,8 +292,8 @@ static ShInt a_primary(AState *a)
         xfree(sub);
         return v;
     }
-    if (!*a->p) a_error(a, "syntax error: operand expected");
-    a_error(a, "syntax error: operand expected");
+    if (!*a->p) a_error(a, "arithmetic syntax error: operand expected");
+    a_error(a, "arithmetic syntax error: operand expected");
     return 0;
 }
 
@@ -306,7 +306,7 @@ static ShInt a_unary(AState *a)
         char *sub;
         ShInt v;
         a->p += 2;
-        if (!read_lvalue(a, name, sizeof(name), &sub)) a_error(a, "syntax error: operand expected");
+        if (!read_lvalue(a, name, sizeof(name), &sub)) a_error(a, "arithmetic syntax error: operand expected");
         v = var_value(a, name, sub) + inc;
         set_var(a, name, sub, v);
         xfree(sub);
@@ -512,7 +512,9 @@ static ShInt a_cond(AState *a)
         if (!c) a->noeval++;
         t = a_assign(a);
         if (!c) a->noeval--;
-        if (!accept(a, ":")) a_error(a, "syntax error: `:' expected for conditional expression");
+        if (!accept(a, ":")) a_error(a, "`:' expected for conditional expression");
+        skipws(a);
+        if (!*a->p) a_error(a, "expression expected");
         if (c) a->noeval++;
         f = a_cond(a);
         if (c) a->noeval--;
@@ -607,8 +609,15 @@ int arith_eval(const char *expr, ShInt *result)
     *result = a_comma(&a);
     skipws(&a);
     if (*a.p) {
-        if (*a.p == ')') a_error(&a, "syntax error in expression");
-        a_error(&a, "syntax error in expression");
+        /* what is left over says what went wrong, as in bash */
+        static const char *const asg[] = {"=", "*=", "/=", "%=", "+=", "-=", "<<=", ">>=", "&=", "^=", "|=", NULL};
+        int k;
+        for (k = 0; asg[k]; k++)
+            if (!strncmp(a.p, asg[k], strlen(asg[k])) && a.p[strlen(asg[k])] != '=')
+                a_error(&a, "attempted assignment to non-variable");
+        if (*a.p == ')' || isalnum((unsigned char)*a.p) || *a.p == '_' || *a.p == '(' || *a.p == '$')
+            a_error(&a, "arithmetic syntax error in expression");
+        a_error(&a, "arithmetic syntax error: invalid arithmetic operator");
     }
     return 0;
 }

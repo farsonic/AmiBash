@@ -6,11 +6,24 @@
 #   tests/run_compat.sh [-v] [-q] [name-filter...]
 #     -v   show stderr diffs too        -q  only the summary
 #
-# Environment: BASH_REF (default /bin/bash), AMIBASH (default build/amibash)
+# Environment: BASH_REF (default: the bash that tools/bash-upstream.sh
+# built, ../toolchain/bash-ref/bash, else /bin/bash), AMIBASH (default
+# build/amibash)
 
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$PWD
-REF=${BASH_REF:-/bin/bash}
+REF=$BASH_REF
+if [ -z "$REF" ]; then
+    REF=/bin/bash
+    [ -x "$ROOT/../toolchain/bash-ref/bash" ] && REF=$ROOT/../toolchain/bash-ref/bash
+fi
+# the reference should be the bash release AmiBash follows (UPSTREAM_BASH)
+WANT=$(sed -n '1s/^\([0-9][0-9.]*\).*/\1/p' UPSTREAM_BASH 2>/dev/null)
+GOT=$("$REF" -c 'echo ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}.${BASH_VERSINFO[2]}' 2>/dev/null)
+case "$WANT" in
+    "" | "$GOT" | "${GOT%.*}") ;;
+    *) echo "run_compat: $REF is bash $GOT, AmiBash follows $WANT (tools/bash-upstream.sh builds it)" >&2 ;;
+esac
 SUT=${AMIBASH:-$ROOT/build/amibash}
 TIMEOUT=${TIMEOUT:-10}
 verbose=0 quiet=0

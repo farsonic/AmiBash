@@ -474,6 +474,13 @@ long os_time_ms(void)
     return (long)(tv.tv_sec * 1000L + tv.tv_usec / 1000);
 }
 
+long os_monoseconds(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return (long)time(NULL);
+    return (long)ts.tv_sec;
+}
+
 long os_tz_offset(void)
 {
     time_t t = time(NULL);

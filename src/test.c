@@ -136,7 +136,7 @@ static int file_time(const char *p, long *t)
 static int to_int(const char *s, ShInt *v)
 {
     if (str_toint(s, v)) return 1;
-    sh_error("%s: %s: integer expression expected", test_cmdname, s);
+    sh_error("%s: %s: integer expected", test_cmdname, s);
     return 0;
 }
 
@@ -437,6 +437,8 @@ int cond_eval(CondNode *c)
             cond_trace(a, op, b);
             re = re_compile(b, sh.sh_nocasematch ? RE_ICASE : 0, &err);
             if (!re) {
+                /* bash 5.3 says so */
+                sh_error("[[: invalid regular expression `%s': %s", b, err ? err : "Invalid regular expression");
                 xfree(err);
                 r = 2;
                 break;

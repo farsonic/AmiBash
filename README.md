@@ -23,7 +23,7 @@ pipeline stage, and for every `$(...)`. AmigaOS has no `fork()` and no MMU to
 emulate one. The old ADE/Geek Gadgets port needs ixemul's heavyweight
 `vfork()` emulation and a GCC 2.x toolchain. AmiBash is a from-scratch
 implementation of the bash language written directly against
-`dos.library`. It uses GNU bash 5.2 as the reference for its behaviour: a test
+`dos.library`. It uses GNU bash 5.3 as the reference for its behaviour: a test
 corpus is run under both shells and their outputs are compared. The
 fork-dependent features are emulated:
 
@@ -379,7 +379,40 @@ make amiga        # build/bash      (68000, ordinary C start-up)
 make amiga020     # build/bash020   (68020+)
 make              # build/amibash   Linux build of the same code, for testing
 make test         # compare against GNU bash on the test corpus
+make upstream     # the newest GNU bash: what changed, and the test corpus against it
 ```
+
+### Keeping up with GNU bash
+
+AmiBash follows one GNU bash release, the one in `UPSTREAM_BASH` (now
+5.3.20, that is 5.3 with its 20 official patches; `$BASH_VERSION` says the
+same). `make upstream` (`tools/bash-upstream.sh`) brings it up to date:
+
+1. it finds the newest bash release and its official patches on
+   ftp.gnu.org, downloads them and checks their GPG signatures against the
+   GNU keyring;
+2. builds that bash in `../toolchain/bash-ref` (the test corpus uses it
+   from then on);
+3. prints what changed since the version AmiBash follows: the NEWS of a
+   newer release and the bug description of every newer patch;
+4. runs the test corpus against it. Every failure is something to do.
+
+Then implement the changes that matter on the Amiga, add a test for each
+to `tests/compat/`, and put the new version in `UPSTREAM_BASH` and in
+`AMIBASH_VERSION` (`src/sh.h`). `tools/bash-upstream.sh -n` only prints
+what changed. The changes made for bash 5.3 are listed below.
+
+**From bash 5.3:** `${ command; }` and `${| command; }` (command
+substitution in the current shell, without the `$(...)` emulation of a
+subshell), `GLOBSORT`, `source -p PATH`, `compgen -V`, `trap -P`,
+`BASH_TRAPSIG`, `BASH_MONOSECONDS`, `printf %#q`/`%#Q` (and `%Q`),
+`TIMEFORMAT` with up to 6 decimals (and `TIMEFORMAT` and `time -p` at
+all), `read -E`, `type -a -P`, the `bash_source_fullpath`,
+`array_expand_once` and `assoc_expand_once` options, an error message for
+a `[[ =~ ]]` regular expression that doesn't compile, and bash 5.3's
+`$LINENO` (the line a command starts on), messages ("integer expected",
+"arithmetic syntax error", "unexpected end of file from `for' command on
+line 5") and `declare -f` output.
 
 Testing without real hardware:
 

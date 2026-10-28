@@ -13,7 +13,9 @@
 #include <stdio.h>
 #include "os.h"
 
-#define AMIBASH_VERSION "5.2.0(1)-amiga"
+/* the GNU bash release AmiBash follows (UPSTREAM_BASH, tools/bash-upstream.sh);
+ * BASH_VERSINFO is taken from it */
+#define AMIBASH_VERSION "5.3.20(1)-amiga"
 #define AMIBASH_SHORTVER "0.2"
 #define AMIBASH_DATE "23.10.2026"
 #define AMIBASH_STR2(x) #x
@@ -435,6 +437,8 @@ int   expand_word(const char *raw, StrList *out, int flags);
 char *expand_str(const char *raw, int flags);
 /* run a command string, capture stdout (trailing newlines removed) */
 char *command_subst(const char *cmd);
+const char *hash_peek(const char *name);
+char *function_subst(const char *cmd, int valsub);
 extern int cmdsubst_status;   /* status of the last $(...), -1 = none  */
 int   brace_expand(const char *raw, StrList *out);
 char *tilde_expand_str(const char *s);       /* for ~user ~+ ~- etc     */
@@ -572,6 +576,7 @@ typedef struct Shell {
     int exitstatus;            /* status for FLOW_EXIT                 */
     int loopdepth;
     int funcdepth;
+    int funsubdepth;           /* inside ${ cmd; } (return works there) */
     int subshell;              /* nesting of emulated subshells        */
     int sourcedepth;
     int lineno;
@@ -590,7 +595,9 @@ typedef struct Shell {
     int sh_nocaseglob, sh_dotglob, sh_nullglob, sh_failglob, sh_extglob,
         sh_globstar, sh_expand_aliases, sh_nocasematch, sh_lastpipe,
         sh_xpg_echo, sh_cdspell, sh_checkwinsize, sh_histappend,
-        sh_autocd, sh_cmdhist, sh_pathconv;
+        sh_autocd, sh_cmdhist, sh_pathconv,
+        sh_array_expand_once,  /* accepted, not acted on (assoc_expand_once too) */
+        sh_source_fullpath;    /* bash_source_fullpath (bash 5.3)      */
     int errexit_suppressed;    /* inside if/while condition, && || !   */
     int in_trap;
     Trap traps[NSIGS];

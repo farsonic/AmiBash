@@ -901,6 +901,15 @@ long os_time_ms(void)
     return (ds.ds_Days % 1000L) * 86400000L + ds.ds_Minute * 60000L + ds.ds_Tick * (1000L / TICKS_PER_SECOND);
 }
 
+/* no monotonic clock as such: the system time in seconds, which only
+ * jumps if someone sets the clock */
+long os_monoseconds(void)
+{
+    struct DateStamp ds;
+    DateStamp(&ds);
+    return ds.ds_Days * 86400L + ds.ds_Minute * 60L + ds.ds_Tick / TICKS_PER_SECOND;
+}
+
 long os_tz_offset(void)
 {
     return 0;   /* the Amiga clock runs in local time */
