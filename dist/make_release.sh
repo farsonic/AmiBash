@@ -1,7 +1,8 @@
 #!/bin/sh
 # Build both Amiga binaries (pure/resident builds), InstallTTF, top,
 # amibash-update (needs the AmiSSL SDK, see contrib/update), ssh and
-# ssh-keygen (needs bebbo's m68k-amigaos-gcc, see contrib/ssh) and pack
+# ssh-keygen and Vim (need bebbo's m68k-amigaos-gcc, see contrib/ssh and
+# contrib/vim) and pack
 # AmiBash.lha (needs jlha-utils "lha") and AmiBash-<version>-bin.zip.
 set -e
 cd "$(dirname "$0")/.."
@@ -9,6 +10,7 @@ make pure pure020
 make -C contrib/installttf
 make -C contrib/top
 make -C contrib/ssh
+make -C contrib/vim
 make -C contrib/update
 V=$(sed -n 's/^#define AMIBASH_SHORTVER "\(.*\)"/\1/p' src/sh.h)
 R=$(mktemp -d)
@@ -20,6 +22,11 @@ cp contrib/installttf/InstallTTF contrib/top/top contrib/update/amibash-update "
 mkdir -p "$R/AmiBash/SSH"
 cp contrib/ssh/ssh contrib/ssh/ssh-keygen contrib/ssh/ssh-copy-id "$R/AmiBash/SSH/"
 cp contrib/ssh/README.md "$R/AmiBash/SSH/ssh.readme"
+mkdir -p "$R/AmiBash/Vim"
+cp contrib/vim/vim "$R/AmiBash/Vim/"
+cp -r contrib/vim/runtime "$R/AmiBash/Vim/"
+rm -f "$R/AmiBash/Vim/runtime/.done"
+cp contrib/vim/README.md "$R/AmiBash/Vim/vim.readme"
 cp dist/Install-AmiBash "$R/AmiBash/"
 python3 tools/mkicon.py "$R/AmiBash/Install-AmiBash.info" Installer APPNAME=AmiBash MINUSER=AVERAGE >/dev/null
 mkdir -p "$R/AmiBash/Icons"
@@ -32,10 +39,10 @@ cp src/*.c src/*.h Makefile "$R/AmiBash/src/"
 # icons, so that Workbench shows everything without "Show all files"
 icon() { python3 tools/mkinfo.py "$@"; }
 icon drawer "$R/AmiBash.info"
-for d in S Fonts Icons SSH tools src; do icon drawer "$R/AmiBash/$d.info"; done
+for d in S Fonts Icons SSH Vim tools src; do icon drawer "$R/AmiBash/$d.info"; done
 cp dist/bash.info "$R/AmiBash/bash020.info"
-for f in InstallTTF top amibash-update SSH/ssh SSH/ssh-keygen; do icon tool "$R/AmiBash/$f.info"; done
-for f in README.md LICENSE AmiBash.readme S/bashrc SSH/ssh.readme SSH/ssh-copy-id \
+for f in InstallTTF top amibash-update SSH/ssh SSH/ssh-keygen Vim/vim; do icon tool "$R/AmiBash/$f.info"; done
+for f in README.md LICENSE AmiBash.readme S/bashrc SSH/ssh.readme SSH/ssh-copy-id Vim/vim.readme \
          tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py tools/mkinfo.py; do
     icon doc "$R/AmiBash/$f.info"
 done

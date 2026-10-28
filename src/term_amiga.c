@@ -22,6 +22,9 @@
 #include <exec/ports.h>
 #include <devices/timer.h>
 #include <devices/inputevent.h>
+#include <devices/conunit.h>
+#undef MAXTABS                   /* its tab stops; ours are tabs */
+#include <exec/io.h>
 #include <dos/dos.h>
 #include <dos/dosextens.h>
 #include <dos/dostags.h>
@@ -139,6 +142,10 @@ typedef struct Tab {
      * size of its screen (the window's columns and rows) */
     int wid, pos;
     int tcols, trows;
+    /* what ACTION_DISK_INFO hands out as the console's IOStdReq: programs
+     * (Vim, less, ...) read the size of the window from its ConUnit */
+    struct IOStdReq *cio;
+    int sizerep;                 /* CSI 12 {: report size changes      */
 } Tab;
 
 static Tab *tabs;                /* MAXTABS of them                    */
@@ -1111,6 +1118,11 @@ static void csi(Tab *t, char final)
         t->cx = t->cy = 0;
         break;
     }
+    case '{':                            /* Amiga: raw events on */
+    case '}':                            /*   and off; 12 = window resized */
+        for (i = 0; i < 8; i++)
+            if (par(t, i, -1) == 12) t->sizerep = final == '{';
+        break;
     case 'c':                            /* device attributes: a VT100 */
         if (t->eb[0] != '>' && par(t, 0, 0) == 0) queue_input(t, "\033[?1;2c", 7);
         break;
@@ -1422,6 +1434,27 @@ static void do_cmd(int cmd);
 static void zoom(int dir);
 static void font_requester(void);
 
+/* tab t's ConUnit (see Tab.cio) to its current window, size and cursor */
+static void sync_unit(Tab *t)
+{
+    struct ConUnit *cu;
+    struct Window *w;
+    if (!t->cio) return;
+    cu = (struct ConUnit *)t->cio->io_Unit;
+    w = win_of(t->wid);
+    cu->cu_Window = w;
+    cu->cu_XMax = t->tcols - 1;
+    cu->cu_YMax = t->trows - 1;
+    cu->cu_XRSize = cw;
+    cu->cu_YRSize = chh;
+    cu->cu_XROrigin = w ? w->BorderLeft : 0;
+    cu->cu_YROrigin = (w ? w->BorderTop : 0) + tabh;
+    cu->cu_XRExtant = cu->cu_XROrigin + t->tcols * cw - 1;
+    cu->cu_YRExtant = cu->cu_YROrigin + t->trows * chh - 1;
+    cu->cu_XCP = cu->cu_XCCP = t->cx;
+    cu->cu_YCP = cu->cu_YCCP = t->cy;
+}
+
 static void handle_packet(Tab *t, struct DosPacket *dp)
 {
     dbg("tab %ld packet %ld arg1 %ld", (LONG)(t - tabs), dp->dp_Type, dp->dp_Arg1);
@@ -1468,8 +1501,14 @@ static void handle_packet(Tab *t, struct DosPacket *dp)
         struct InfoData *id = (struct InfoData *)BADDR(dp->dp_Arg1);
         memset(id, 0, sizeof(*id));
         id->id_DiskType = ID_DOS_DISK;
-        id->id_VolumeNode = (BPTR)win;
-        id->id_InUse = 0;
+        id->id_VolumeNode = (BPTR)win_of(t->wid);
+        if (!t->cio)
+            t->cio = AllocVec(sizeof(struct IOStdReq) + sizeof(struct ConUnit), MEMF_PUBLIC | MEMF_CLEAR);
+        if (t->cio) {
+            t->cio->io_Unit = (struct Unit *)(t->cio + 1);
+            sync_unit(t);
+        }
+        id->id_InUse = (BPTR)t->cio;
         reply(dp, DOSTRUE, 0);
         break;
     }
@@ -1790,6 +1829,7 @@ static void tab_free(Tab *t)
     if (t->hch) FreeVec(t->hch);
     if (t->hat) FreeVec(t->hat);
     if (t->paste) FreeVec(t->paste);
+    if (t->cio) FreeVec(t->cio);
     memset(t, 0, sizeof(*t));
 }
 
@@ -1981,6 +2021,10 @@ static int resize_tab(Tab *t, int ncols, int nrows)
     if (t->cx >= ncols) t->cx = ncols - 1;
     t->tcols = ncols;
     t->trows = nrows;
+    sync_unit(t);
+    /* like the console's raw event: a program in raw mode that asked for
+     * it (Vim) reads the new size then */
+    if (t->sizerep && t->raw) queue_input(t, "\23312;0;0;0;0;0;0;0|", 18);
     return 1;
 }
 
@@ -3136,6 +3180,7 @@ static void move_tab(int i, int w)
     resize_tab(t, cols, rows);
     t->view = 0;
     t->wid = w;
+    sync_unit(t);
     t->pos = next_pos();
     ntabs_open++;
     select_tab(i);

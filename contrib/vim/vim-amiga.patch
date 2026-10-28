@@ -1,0 +1,322 @@
+diff --git a/src/os_amiga.c b/src/os_amiga.c
+index 1e36285..0c649cc 100644
+--- a/src/os_amiga.c
++++ b/src/os_amiga.c
+@@ -410,6 +410,25 @@ mch_check_win(int argc, char **argv)
+ 		usewin = TRUE;
+ 		break;
+ 
++	    case '-':
++		// --version and --help only print
++		if (STRCMP(argv[i], "--version") == 0
++					    || STRCMP(argv[i], "--help") == 0)
++		    return OK;
++		break;
++
++	    case 'h':
++		if (argv[i][2] == NUL)
++		    return OK;
++		break;
++
++	    case 'e':
++	    case 'E':
++		// silent Ex mode (-es, -Es) runs a script without a screen
++		if (argv[i][2] == 's')
++		    return OK;
++		break;
++
+ 	    case 'd':
+ 		if (i < argc - 1
+ #ifdef FEAT_DIFF
+@@ -1075,50 +1094,91 @@ mch_settmode(tmode_T tmode)
+ #include <devices/conunit.h>
+ 
+ /*
+- * Get console size in a system friendly way on AROS and MorphOS.
+- * Return FAIL for failure, OK otherwise
++ * Ask the console for its size with a window bounds request (CSI 0 SPACE q),
++ * which every console answers with CSI 1;1;rows;columns SPACE r.
++ * Return FAIL for failure, OK otherwise.
+  */
+-#if defined(__AROS__) || defined(__MORPHOS__)
+-    int
+-mch_get_shellsize(void)
++    static int
++bounds_report(void)
+ {
+-    if (!term_console)
++    int		old_tmode = cur_tmode;
++    char	ctrl[] = "\x9b""0 q";
++    char	answ[40];
++    int		len = 0;
++    int		r, c;
++    int		ok = FAIL;
++
++    if (!raw_in || !raw_out)
+ 	return FAIL;
+ 
+-    if (raw_in && raw_out)
++    mch_settmode(TMODE_RAW);
++    if (Write(raw_out, ctrl, sizeof(ctrl) - 1) == sizeof(ctrl) - 1)
+     {
+-	// Save current console mode.
+-	int old_tmode = cur_tmode;
+-	char ctrl[] = "\x9b""0 q";
+-
+-	// Set RAW mode.
+-	mch_settmode(TMODE_RAW);
+-
+-	// Write control sequence to console.
+-	if (Write(raw_out, ctrl, sizeof(ctrl)) == sizeof(ctrl))
++	// the answer can come in pieces; give up after a second
++	while (len < (int)sizeof(answ) - 1 && WaitForChar(raw_in, 1000000L))
+ 	{
+-	    char scan[] = "\x9b""1;1;%d;%d r",
+-		 answ[sizeof(scan) + 8] = { '\0' };
+-
+-	    // Read return sequence from input.
+-	    if (Read(raw_in, answ, sizeof(answ) - 1) > 0)
++	    if (Read(raw_in, answ + len, 1) != 1)
++		break;
++	    if (len == 0 && (answ[0] & 0xff) != CSI)
++		continue;	// typed ahead: not part of the answer
++	    answ[++len] = NUL;
++	    if (answ[len - 1] == 'r')
+ 	    {
+-		// Parse result and set Vim globals.
+-		if (sscanf(answ, scan, &Rows, &Columns) == 2)
++		if (sscanf(answ, "\x9b""1;1;%d;%d r", &r, &c) == 2
++				    && r > 0 && r <= 1000 && c > 0 && c <= 1000)
+ 		{
+-		    // Restore console mode.
+-		    mch_settmode(old_tmode);
+-		    return OK;
++		    Rows = r;
++		    Columns = c;
++		    ok = OK;
+ 		}
++		break;
+ 	    }
+ 	}
+-
+-	// Restore console mode.
+-	mch_settmode(old_tmode);
+     }
++    mch_settmode(old_tmode);
++    return ok;
++}
++
++/*
++ * The size in $LINES and $COLUMNS, as a last resort.
++ * Return FAIL for failure, OK otherwise.
++ */
++    static int
++env_shellsize(void)
++{
++    char_u  *l = mch_getenv((char_u *)"LINES");
++    char_u  *c = mch_getenv((char_u *)"COLUMNS");
++    int	    r, n;
++
++    if (l == NULL || c == NULL)
++	return FAIL;
++    r = atoi((char *)l);
++    n = atoi((char *)c);
++    if (r <= 0 || n <= 0)
++	return FAIL;
++    Rows = r;
++    Columns = n;
++    return OK;
++}
++
++#if defined(__AROS__) || defined(__MORPHOS__)
++/*
++ * Get console size in a system friendly way on AROS and MorphOS.
++ * Return FAIL for failure, OK otherwise
++ */
++    int
++mch_get_shellsize(void)
++{
++    if (!term_console)
++	return env_shellsize();
++
++    if (bounds_report() == OK)
++	return OK;
+ 
+     // I/O error. Default size fallback.
+     term_console = FALSE;
++    if (env_shellsize() == OK)
++	return OK;
+     Columns = 80;
+     Rows = 24;
+ 
+@@ -1137,14 +1197,17 @@ mch_get_shellsize(void)
+     char	    id_a[sizeof(struct InfoData) + 3];
+ # endif
+     struct InfoData *id=0;
++    int		    ret = FAIL;
+ 
+-    if (!term_console)	// not an amiga window
+-	goto out;
++    // Not an Amiga window by $TERM, but it may still be a console that
++    // knows its size (AmiBash's terminal with TERM=xterm, for one).
++    if (!term_console && (raw_out == (BPTR)NULL || !IsInteractive(raw_out)))
++	return env_shellsize();
+ 
+     // insure longword alignment
+ # ifdef __amigaos4__
+     if (!(id = AllocDosObject(DOS_INFODATA, 0)))
+-	goto out;
++	return env_shellsize();
+ # else
+     id = (struct InfoData *)(((long)id_a + 3L) & ~3L);
+ # endif
+@@ -1154,7 +1217,7 @@ mch_get_shellsize(void)
+      * Unfortunately, under DOS 2.0x this redraws the window and it
+      * is rarely needed, so we skip it now, unless we changed the size.
+      */
+-    if (size_set)
++    if (term_console && size_set)
+ 	OUT_STR("\233t\233u");	// CSI t CSI u
+     out_flush();
+ 
+@@ -1164,35 +1227,42 @@ mch_get_shellsize(void)
+ 	// it's not an amiga window, maybe aux device
+ 	// terminal type should be set
+ 	term_console = FALSE;
++	ret = env_shellsize();
+ 	goto out;
+     }
+     if (oldwindowtitle == NULL)
+ 	oldwindowtitle = (char_u *)wb_window->Title;
+     if (id->id_InUse == (BPTR)NULL)
+     {
+-	mch_errmsg(_("mch_get_shellsize: not a console??\n"));
+-	return FAIL;
++	// A console window without a console.device unit (KingCON in some
++	// modes, terminal programs): ask it, it knows its size.
++	ret = bounds_report();
++	if (ret == FAIL)
++	    ret = env_shellsize();
++	goto out;
+     }
+     conUnit = (struct ConUnit *) ((struct IOStdReq *) id->id_InUse)->io_Unit;
+ 
+     // get window size
+     Rows = conUnit->cu_YMax + 1;
+     Columns = conUnit->cu_XMax + 1;
+-    if (Rows < 0 || Rows > 200)	    // cannot be an amiga window
++    if (Rows < 0 || Rows > 1000 || Columns <= 0 || Columns > 1000)
+     {
++	// cannot be an amiga window
+ 	Columns = 80;
+ 	Rows = 24;
+ 	term_console = FALSE;
+-	return FAIL;
++	ret = env_shellsize();
++	goto out;
+     }
++    ret = OK;
+ 
+-    return OK;
+ out:
+ # ifdef __amigaos4__
+     FreeDosObject(DOS_INFODATA, id); // Safe to pass NULL
+ # endif
+ 
+-    return FAIL;
++    return ret;
+ }
+ #endif
+ 
+@@ -1818,3 +1888,53 @@ mch_get_random(char_u *buf, int len)
+     Close(fh);
+     return status;
+ }
++
++/*
++ * The size of a character cell in pixels: not known in a console.
++ */
++    void
++mch_calc_cell_size(struct cellsize *cs_out)
++{
++    cs_out->cs_xpixel = 0;
++    cs_out->cs_ypixel = 0;
++}
++
++/*
++ * system() and systemlist() with a List: there is no execvp(), so quote the
++ * arguments into one command line and run it as a string command would.
++ */
++    char_u *
++mch_get_cmd_output_direct(
++	char	**argv,
++	char_u	*infile,
++	int	flags,
++	int	*ret_len)
++{
++    garray_T	ga;
++    char_u	*res;
++    int		i;
++
++    ga_init2(&ga, 1, 200);
++    for (i = 0; argv[i] != NULL; ++i)
++    {
++	char *p;
++
++	if (i > 0)
++	    ga_append(&ga, ' ');
++	ga_append(&ga, '"');
++	for (p = argv[i]; *p != NUL; ++p)
++	{
++	    // "*" is the escape character of AmigaDOS ReadArgs()
++	    if (*p == '"' || *p == '*')
++		ga_append(&ga, '*');
++	    ga_append(&ga, *p);
++	}
++	ga_append(&ga, '"');
++    }
++    ga_append(&ga, NUL);
++    if (ga.ga_data == NULL)
++	return NULL;
++    res = get_cmd_output(ga.ga_data, infile, flags, ret_len);
++    ga_clear(&ga);
++    return res;
++}
+diff --git a/src/proto/os_amiga.pro b/src/proto/os_amiga.pro
+index 8651dd6..29a9497 100644
+--- a/src/proto/os_amiga.pro
++++ b/src/proto/os_amiga.pro
+@@ -43,4 +43,7 @@ int mch_has_wildcard(char_u *p);
+ char_u *mch_getenv(char_u *var);
+ int mch_setenv(char *var, char *value, int x);
+ int mch_get_random(char_u *buf, int len);
++int mch_rmdir(char_u *name);
++void mch_calc_cell_size(struct cellsize *cs_out);
++char_u *mch_get_cmd_output_direct(char **argv, char_u *infile, int flags, int *ret_len);
+ // vim: ft=c
+diff --git a/src/term.c b/src/term.c
+index bd1b411..18bf489 100644
+--- a/src/term.c
++++ b/src/term.c
+@@ -2396,6 +2396,21 @@ set_termname(char_u *term)
+ 	term_console = TRUE;
+ # ifdef AMIGA
+ 	win_resize_on();	// enable window resizing reports
++#  if !defined(__amigaos4__) && !defined(__MORPHOS__) && !defined(__AROS__)
++	{
++	    // AmiBash's Terminal has the ANSI colours that the AmigaOS 3
++	    // console lacks
++	    char_u *tp = mch_getenv((char_u *)"TERM_PROGRAM");
++
++	    if (tp != NULL && STRCMP(tp, "AmiBash") == 0 && *T_CCO == NUL)
++	    {
++		T_CCO = (char_u *)"8";
++		T_CAB = (char_u *)"\033[4%dm";
++		T_CAF = (char_u *)"\033[3%dm";
++		T_OP = (char_u *)"\033[m";
++	    }
++	}
++#  endif
+ # endif
+     }
+ #endif

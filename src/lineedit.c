@@ -921,6 +921,14 @@ char *le_readline(const char *prompt)
     tout = os_stdout();
     sb_init(&obuf);
     if (os_console_size(tout, &rows, &cols) != 0 || cols < 10) cols = 80;
+    else if (sh.sh_checkwinsize) {
+        /* like bash: keep LINES and COLUMNS up to date */
+        char n[16];
+        sprintf(n, "%d", cols);
+        var_set("COLUMNS", n, 0);
+        sprintf(n, "%d", rows);
+        var_set("LINES", n, 0);
+    }
     memset(&e, 0, sizeof(e));
     sb_init(&e.buf);
     sb_addn(&e.buf, "", 0);

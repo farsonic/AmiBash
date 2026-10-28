@@ -1,0 +1,4 @@
+vim-src/
+runtime/
+/vim
+build/

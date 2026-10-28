@@ -51,6 +51,10 @@ on a server.  "ssh user@host" in the AmiBash Terminal gives a remote
 shell (TERM=xterm-256color: colours, Vim, less and the cursor keys
 work); keys and known hosts live in $HOME/.ssh (SYS:.ssh by default).
 
+The Vim drawer has Vim 9.2 (68020+) with syntax files, colour schemes
+and the complete help.  In the AmiBash Terminal it uses the whole
+window, follows resizes and has syntax colours.
+
 Its behaviour is checked against GNU bash 5.3 with a test corpus, and it
 runs on 68000 with 1 MB (bash) or 68020+ (bash020).
 
@@ -59,6 +63,8 @@ Install:  double-click Install-AmiBash (Amiga Installer), or by hand:
           Copy S/bashrc TO S:    (optional)
           Copy Fonts/#? TO FONTS: ALL   (terminal font)
           Copy SSH/#? TO C:   (ssh, 68020+, optional)
+          Copy Vim/vim TO C:  and  Copy Vim/runtime TO VIM: ALL
+                              (Vim, 68020+, optional; Assign VIM: first)
           then type "bash" in a Shell window, or "bash --term"
           (Workbench: copy bash and bash.info to a drawer).
 

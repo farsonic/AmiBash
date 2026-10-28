@@ -187,7 +187,7 @@ cd InstallerLG-1.0.3/build && make INTERFACE=CLI
 
 ## 7. bebbo's m68k-amigaos-gcc
 
-bash itself is built with vbcc, but `contrib/ssh` (OpenSSH) is built with
+bash itself is built with vbcc, but `contrib/ssh` (OpenSSH) and `contrib/vim` are built with
 gcc and libnix, so `dist/make_release.sh` needs it. The build takes about
 20 minutes with 4 cores and 4 GB of disk.
 

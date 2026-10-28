@@ -44,8 +44,8 @@ Installer, in `SYS:Utilities` or `C:` on OS 3.x). It picks the 68000 or
 `C:`, the example `S:bashrc` (an existing one is kept as `S:bashrc.old`),
 the AmiBashMono fonts, `InstallTTF`, the DejaVu Sans Mono TrueType font for
 smooth text with AAText on RTG, an *AmiBash Terminal* icon in `SYS:Tools`,
-`ssh` and `ssh-keygen` (68020+), and optionally `Resident C:bash PURE` in
-`S:User-Startup`.
+`ssh` and `ssh-keygen` (68020+), Vim 9.2 (68020+), and optionally
+`Resident C:bash PURE` in `S:User-Startup`.
 
 By hand:
 
@@ -317,6 +317,33 @@ ssh-copy-id user@host          # put that key on the server, then no password
 
 `contrib/ssh/README.md` has the details, including how random numbers are
 made without `/dev/urandom` and how to build it.
+
+## Vim
+
+The archive's `Vim` drawer has **Vim 9.2** (patch 1252, the "huge" build,
+68020+) and its runtime files. The Installer puts `vim` in `C:` and the
+runtime files in `VIM:`. An existing `VIM:` from the Aminet Vim is updated;
+otherwise the Installer makes a `Vim` drawer where you choose and assigns
+`VIM:` to it in `S:User-Startup`.
+
+In the AmiBash Terminal:
+
+* **Window size:** Vim uses the whole window. When the window is resized, or
+  the text gets bigger or smaller, Vim redraws at the new size.
+* **Colours:** syntax highlighting works.
+
+How the terminal reports its size:
+
+* **`ACTION_DISK_INFO`:** the reply carries a console unit with the window's
+  columns and rows, as `CON:` does.
+* **Window bounds report:** the terminal answers it.
+* **Resize events:** sent to programs that ask for them.
+
+Other console programs that read the window size get the right one too,
+including the Vim on Aminet. Bash also keeps `$COLUMNS` and `$LINES` up to
+date.
+
+`contrib/vim/README.md` covers building it and moving to a newer Vim.
 
 ## Line editing, colours and fonts
 

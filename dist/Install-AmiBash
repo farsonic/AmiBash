@@ -1,4 +1,4 @@
-; $VER: Install-AmiBash 1.3 (23.10.2026)
+; $VER: Install-AmiBash 1.4 (28.10.2026)
 ;
 ; Installs AmiBash with the standard Amiga Installer (OS 3.x) or
 ; InstallerLG.  Double-click its icon, or from the Shell:
@@ -49,6 +49,9 @@
       "need a 68020 or better and a TCP/IP stack (Roadshow, AmiTCP, Miami or "
       "Genesis). Keys and known hosts go in $HOME/.ssh, SYS:.ssh unless HOME "
       "is set.\n\n"
+      "Vim 9.2 - the editor, in C:, with its runtime files (syntax "
+      "highlighting, help) in VIM:. In the AmiBash Terminal it uses the whole "
+      "window, follows its size and has colours. Needs a 68020 or better.\n\n"
       "Resident - loads bash once at startup (S:User-Startup), so every bash "
       "and terminal tab shares one copy in memory and starts at once.")
     (choices
@@ -59,8 +62,9 @@
       "DejaVu Sans Mono TrueType font"
       "AmiBash Terminal icon in SYS:Tools"
       "ssh and ssh-keygen in C: (68020+)"
-      "Make bash resident at startup")
-    (default (if #has020 127 63))))
+      "Make bash resident at startup"
+      "Vim 9.2 in C: (68020+)")
+    (default (if #has020 383 63))))
 
 ; ---- bash --------------------------------------------------------------
 (if (in #opts 0)
@@ -154,6 +158,35 @@
       (choices "ssh" "ssh-keygen" "ssh-copy-id") (nogauge))
     (message "ssh needs a 68020 or better; it was not installed.")))
 
+; ---- Vim ----------------------------------------------------------------
+(if (in #opts 8)
+  (if #has020
+    (
+      (copyfiles (prompt "Copying vim to C:") (help @copyfiles-help)
+        (source (tackon #here "Vim/vim")) (dest "C:") (nogauge))
+      (set #vimdir (getassign "VIM" "a"))
+      (if (= #vimdir "")
+        (
+          (set #vimparent
+            (askdir
+              (prompt "Where should the Vim runtime files go?\n"
+                      "(A drawer \"Vim\" is made there and assigned to VIM:.)")
+              (help @askdir-help)
+              (default "SYS:Utilities")))
+          (set #vimdir (tackon #vimparent "Vim"))
+          (if (= (exists #vimdir) 0) (makedir #vimdir))
+          (startup "Vim"
+            (prompt "Adding \"Assign VIM: " #vimdir "\" to S:User-Startup")
+            (help @startup-help)
+            (command "Assign >NIL: VIM: \"" #vimdir "\"\n"))
+          (run (cat "Assign >NIL: VIM: \"" #vimdir "\""))
+        ))
+      (copyfiles (prompt "Copying the Vim runtime files to " #vimdir)
+        (help @copyfiles-help)
+        (source (tackon #here "Vim/runtime")) (dest #vimdir) (all))
+    )
+    (message "Vim needs a 68020 or better; it was not installed.")))
+
 ; ---- resident ---------------------------------------------------------
 (if (in #opts 7)
   (startup "AmiBash"
@@ -168,5 +201,6 @@
   "For smooth TrueType text: an RTG screen with 15 bits or more, and "
   "AAText running (Aminet util/wb/AAText)."
   (if (in #opts 6) "\n\nssh: type ssh user@host. It needs a running TCP/IP stack." "")
+  (if (and (in #opts 8) #has020) "\n\nVim: type vim. Its runtime files are in VIM:." "")
   (if (in #opts 7) "\n\nbash is made resident from the next reboot." "")
   (quiet))
