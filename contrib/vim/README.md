@@ -34,17 +34,17 @@ expects them.
 
 ## What is included
 
-The runtime files are:
+The runtime files are Vim's own, without its test files:
 
 * `defaults.vim` and the rest of the startup scripts;
 * file type detection;
-* syntax, indent and file type plugins for about 40 common languages;
+* syntax, indent and file type plugins for every file type Vim knows, with
+  the autoload scripts they use;
+* compiler settings and the standard plugins;
 * all the colour schemes;
-* the matchparen plugin;
 * the complete help (`:help`).
 
-To use more of Vim's runtime, copy the extra files from a Vim 9.2 source
-archive into `VIM:`.
+Left out: the GUI menus, keymaps, spell files, translations and the tutor.
 
 Put your settings in `S:.vimrc`, `VIM:.vimrc` or `HOME:.vimrc`.
 

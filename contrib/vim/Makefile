@@ -51,8 +51,12 @@ build/%.o: $(SRC)/src/%.c
 # the runtime files the package carries (see runtime.list)
 runtime/.done: $(SRC)/.patched runtime.list
 	rm -rf runtime
-	cd $(SRC)/runtime && grep -v '^#' ../../runtime.list | xargs -I{} sh -c \
-	    'for f in {}; do mkdir -p ../../runtime/$$(dirname $$f); cp $$f ../../runtime/$$f; done'
+	mkdir runtime
+	cd $(SRC)/runtime && grep -v '^#' ../../runtime.list | while read p; do \
+	    for f in $$p; do mkdir -p ../../runtime/$$(dirname $$f); cp -r $$f ../../runtime/$$f; done; done
+	find runtime -name testdir -type d -prune -exec rm -rf {} +
+	cd runtime && rm -f gvimrc_example.vim menu.vim synmenu.vim delmenu.vim makemenu.vim \
+	    mswin.vim evim.vim macmap.vim bugreport.vim
 	touch $@
 
 $(SRC)/.patched: vim-amiga.patch
