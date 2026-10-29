@@ -181,6 +181,11 @@
             (command "Assign >NIL: VIM: \"" #vimdir "\"\n"))
           (run (cat "Assign >NIL: VIM: \"" #vimdir "\""))
         ))
+      ; VIM:vimrc is AmiBash's (UTF-8 files on a Latin-1 screen): keep one
+      ; that is already there as vimrc.old
+      (if (exists (tackon #vimdir "vimrc"))
+        (copyfiles (source (tackon #vimdir "vimrc")) (dest #vimdir)
+          (newname "vimrc.old") (nogauge)))
       (copyfiles (prompt "Copying the Vim runtime files to " #vimdir)
         (help @copyfiles-help)
         (source (tackon #here "Vim/runtime")) (dest #vimdir) (all))

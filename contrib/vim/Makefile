@@ -37,19 +37,21 @@ CFLAGS := -O2 -m68020 -noixemul -std=gnu99 -fno-strict-aliasing -DAMIGA \
 SRCS = $(shell sed -n '/^SRC +=/,/^$$/{s/^[[:space:]]*//;s/[[:space:]]*\\$$//;/\.c$$/p}' $(SRC)/src/Make_ami.mak)
 OBJS = $(addprefix build/,$(SRCS:.c=.o))
 
-vim: $(SRC)/.patched
+# a sub-make, as the list of objects needs the source tree; it relinks
+# only when something changed
+vim: $(SRC)/.patched FORCE
 	$(MAKE) build/vim
-	$(AMIGCC)/bin/m68k-amigaos-strip build/vim -o $@
+	if [ ! -f $@ ] || [ build/vim -nt $@ ]; then $(AMIGCC)/bin/m68k-amigaos-strip build/vim -o $@; fi
 
 build/vim: $(OBJS)
 	$(CC) -noixemul -o $@ $(OBJS) -lm
 
-build/%.o: $(SRC)/src/%.c
+build/%.o: $(SRC)/src/%.c $(SRC)/.patched
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # the runtime files the package carries (see runtime.list)
-runtime/.done: $(SRC)/.patched runtime.list
+runtime/.done: $(SRC)/.patched runtime.list vimrc $(shell find vimfiles -type f)
 	rm -rf runtime
 	mkdir runtime
 	cd $(SRC)/runtime && grep -v '^#' ../../runtime.list | while read p; do \
@@ -57,6 +59,8 @@ runtime/.done: $(SRC)/.patched runtime.list
 	find runtime -name testdir -type d -prune -exec rm -rf {} +
 	cd runtime && rm -f gvimrc_example.vim menu.vim synmenu.vim delmenu.vim makemenu.vim \
 	    mswin.vim evim.vim macmap.vim bugreport.vim
+	cp vimrc runtime/
+	cp -r vimfiles runtime/
 	touch $@
 
 $(SRC)/.patched: vim-amiga.patch
@@ -69,4 +73,5 @@ $(SRC)/.patched: vim-amiga.patch
 clean:
 	rm -rf $(SRC) build runtime vim
 
-.PHONY: all clean
+.PHONY: all clean FORCE
+FORCE:

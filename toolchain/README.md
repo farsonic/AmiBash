@@ -175,6 +175,21 @@ Tips:
 * AROS's freetype2.library sometimes hangs on DejaVu fonts; use
   `ENGINE=aatext` with InstallTTF.
 
+**Real AmigaOS 3.1.4.** AROS has more memory than most Amigas and isn't the
+OS users run. With your own Kickstart 3.1.4 ROM and the 3.1.4 disks (ADFs,
+in a zip), `emu/setup_os314.sh` builds a bootable system in
+`/tmp/claude-0/os314`: Workbench plus the Install disk's libraries and
+Installer, the fonts, and the `Work:autorun` hook. `emu/os314.fs-uae` is an
+A1200 with a 68030 and 8 MB of Fast RAM:
+
+```sh
+emu/setup_os314.sh kick.a1200.46.143 AmigaOS3.1.4-adfs.zip
+CFG=os314 emu/aros_run.sh script        # or: emu/run.sh os314
+```
+
+ROMs and OS files are copyrighted: keep them out of the repository. It boots
+in about 15 seconds, much more reliably than AROS.
+
 ## 6. InstallerLG (optional)
 
 AROS's own Installer fails on every script here, so `dist/Install-AmiBash`

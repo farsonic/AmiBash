@@ -1,0 +1,11 @@
+" VIM:vimrc - AmiBash's system-wide settings for Vim on AmigaOS.
+" Your own settings go in S:.vimrc, VIM:.vimrc or HOME:.vimrc.
+
+" Amiga screens and fonts are Latin-1, files today are often UTF-8: keep
+" text as UTF-8 inside Vim, read UTF-8 or Latin-1 files as they are, show
+" them in Latin-1 (characters it lacks appear as ?) and write new files
+" in Latin-1 like other Amiga programs.
+set encoding=utf-8
+set termencoding=latin1
+set fileencodings=ucs-bom,utf-8,latin1
+setglobal fileencoding=latin1

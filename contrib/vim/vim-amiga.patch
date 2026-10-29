@@ -1,3 +1,22 @@
+diff --git a/src/optiondefs.h b/src/optiondefs.h
+index 8dc3183..7fe1967 100644
+--- a/src/optiondefs.h
++++ b/src/optiondefs.h
+@@ -2185,7 +2185,14 @@ static struct vimoption options[] =
+ 			    {(char_u *)2000L, (char_u *)0L} SCTX_INIT},
+     {"regexpengine", "re",  P_NUM|P_VI_DEF,
+ 			    (char_u *)&p_re, PV_NONE, NULL, NULL,
++#ifdef AMIGA
++			    // the NFA engine's programs for the ~1800 patterns
++			    // of filetype.vim take 10 MB or more: too much for
++			    // most Amigas, and slow to make on a 68k
++			    {(char_u *)1L, (char_u *)0L} SCTX_INIT},
++#else
+ 			    {(char_u *)0L, (char_u *)0L} SCTX_INIT},
++#endif
+     {"relativenumber", "rnu", P_BOOL|P_VI_DEF|P_RWIN,
+ 			    (char_u *)VAR_WIN, PV_RNU,
+ 			    did_set_number_relativenumber, NULL,
 diff --git a/src/os_amiga.c b/src/os_amiga.c
 index 1e36285..0c649cc 100644
 --- a/src/os_amiga.c

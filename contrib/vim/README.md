@@ -7,7 +7,8 @@ build, without the GUI, built from Vim's own Amiga port with a few changes.
 
 * **Window size:** Vim uses the whole window. When the window is resized, or
   the text gets bigger or smaller, Vim redraws at the new size.
-* **Colours:** syntax highlighting works.
+* **Colours:** syntax highlighting works, as far as the screen has
+  colours (a 4-colour Workbench shows few).
 
 The terminal gives Vim its size in the same ways as the Amiga console:
 
@@ -30,7 +31,21 @@ Assign VIM: <drawer>                  ; also in S:User-Startup
 
 If you already have a Vim from Aminet, copy the runtime files into its `VIM:`
 drawer. They replace older files with the same names, and the 9.2 binary
-expects them.
+expects them. The Installer keeps an existing `VIM:vimrc` as `vimrc.old`.
+
+## Memory, text and Markdown
+
+* **Memory:** it runs in 8 MB of Fast RAM; Vim and an open file take about
+  3 to 4 MB. Vim on the Amiga uses the backtracking regexp engine
+  (`regexpengine=1`) by default. With the NFA engine, file type detection
+  alone took over 10 MB and many seconds on a 68030, and failed with
+  "Out of memory" on an 8 MB machine.
+* **Text encoding:** `VIM:vimrc` makes Vim work in UTF-8 and show Latin-1,
+  the Amiga's character set. UTF-8 and Latin-1 files both open correctly
+  (`café` in either); characters Latin-1 doesn't have, like an em dash,
+  show as `¿`. New files are written in Latin-1.
+* **Markdown:** `VIM:vimfiles/after/syntax/markdown.vim` stops Vim marking
+  `_` inside words (`os_amiga.c`) as errors, as GitHub's Markdown does.
 
 ## What is included
 
@@ -78,3 +93,4 @@ What `vim-amiga.patch` changes:
   window.
 * **`term.c`:** 8 ANSI colours with the `amiga` terminal when
   `TERM_PROGRAM=AmiBash`.
+* **`optiondefs.h`:** `regexpengine` defaults to 1 on the Amiga.

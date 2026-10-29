@@ -1,12 +1,13 @@
 #!/bin/bash
-# aros_run.sh SCRIPTFILE [TIMEOUT] - boot the RTG AROS setup (arosrtg.fs-uae),
+# aros_run.sh SCRIPTFILE [TIMEOUT] - boot the RTG AROS setup (arosrtg.fs-uae;
+# CFG=os314 for AmigaOS 3.1.4, see setup_os314.sh),
 # run SCRIPTFILE (AmigaDOS commands) as Work:autorun, wait for it to finish
 # (it should end with: Echo >Work:autorun.done done), then stop FS-UAE.
 cd "$(dirname "$0")"
 T=${2:-300}
 rm -f dh0/autorun.done dh0/autorun.done.uaem
 cp "$1" dh0/autorun
-./run.sh arosrtg
+./run.sh ${CFG:-arosrtg}
 for i in $(seq 1 $T); do
     [ -f dh0/autorun.done ] && break
     sleep 1
