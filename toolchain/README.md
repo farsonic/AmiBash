@@ -188,7 +188,8 @@ CFG=os314 emu/aros_run.sh script        # or: emu/run.sh os314
 ```
 
 ROMs and OS files are copyrighted: keep them out of the repository. It boots
-in about 15 seconds, much more reliably than AROS.
+in about 15 seconds, much more reliably than AROS. `emu/os314real.fs-uae` is
+the same machine at the real A1200 speed, for timing what users will see.
 
 ## 6. InstallerLG (optional)
 

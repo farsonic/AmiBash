@@ -1,3 +1,49 @@
+diff --git a/runtime/autoload/htmlcomplete.vim b/runtime/autoload/htmlcomplete.vim
+index 267889d..11b8222 100644
+--- a/runtime/autoload/htmlcomplete.vim
++++ b/runtime/autoload/htmlcomplete.vim
+@@ -46,6 +46,9 @@ function! htmlcomplete#DetectOmniFlavor()
+ endfunction
+ 
+ function! htmlcomplete#CompleteTags(findstart, base)
++  if !exists('b:html_omni_flavor')
++    call htmlcomplete#DetectOmniFlavor()
++  endif
+   if a:findstart
+     " locate the start of the word
+     let line = getline('.')
+diff --git a/runtime/ftplugin/html.vim b/runtime/ftplugin/html.vim
+index 172292f..e8a3963 100644
+--- a/runtime/ftplugin/html.vim
++++ b/runtime/ftplugin/html.vim
+@@ -31,7 +31,9 @@ endif
+ 
+ if exists('&omnifunc')
+   setlocal omnifunc=htmlcomplete#CompleteTags
+-  call htmlcomplete#DetectOmniFlavor()
++  " AmiBash: htmlcomplete#CompleteTags() detects the flavor when it is first
++  " used; loading the whole of htmlcomplete.vim for every HTML and Markdown
++  " file takes seconds on a 68k
+   let b:undo_ftplugin ..= " | setlocal omnifunc<"
+ endif
+ 
+diff --git a/src/highlight.c b/src/highlight.c
+index c76e250..1b93f94 100644
+--- a/src/highlight.c
++++ b/src/highlight.c
+@@ -660,6 +660,12 @@ load_colors(char_u *name)
+     if (buf != NULL)
+     {
+ #if defined(FEAT_EVAL) && (defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS))
++# ifdef AMIGA
++	// only GUI colours use the names, and colorname2rgb() loads them
++	// when one is looked up: don't spend seconds of a 68k on them for
++	// every colour scheme
++	if (p_tgc)
++# endif
+ 	load_default_colors_lists();
+ #endif
+ 	apply_autocmds(EVENT_COLORSCHEMEPRE, name,
 diff --git a/src/optiondefs.h b/src/optiondefs.h
 index 8dc3183..7fe1967 100644
 --- a/src/optiondefs.h
@@ -339,3 +385,22 @@ index bd1b411..18bf489 100644
  # endif
      }
  #endif
+diff --git a/src/vim9cmds.c b/src/vim9cmds.c
+index aa13bc6..20943ce 100644
+--- a/src/vim9cmds.c
++++ b/src/vim9cmds.c
+@@ -386,7 +386,13 @@ compile_fill_jump_to_end(endlabel_T **el, int jump_where, cctx_T *cctx)
+ 	isn_T	    *isn;
+ 
+ 	isn = ((isn_T *)instr->ga_data) + cur->el_end_label;
+-	isn->isn_arg.jump.jump_where = jump_where;
++	// An ISN_WHILE has its end in "whileloop", which lies on top of
++	// "jump.jump_where" only where an int is 4-byte aligned: not on the
++	// 68000 family, where every while loop then jumped to instruction 0.
++	if (isn->isn_type == ISN_WHILE)
++	    isn->isn_arg.whileloop.while_end = jump_where;
++	else
++	    isn->isn_arg.jump.jump_where = jump_where;
+ 	*el = cur->el_next;
+ 	vim_free(cur);
+     }

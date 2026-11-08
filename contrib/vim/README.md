@@ -40,6 +40,13 @@ expects them. The Installer keeps an existing `VIM:vimrc` as `vimrc.old`.
   (`regexpengine=1`) by default. With the NFA engine, file type detection
   alone took over 10 MB and many seconds on a 68030, and failed with
   "Out of memory" on an 8 MB machine.
+* **Speed:** Vim 9's start-up scripts (file type detection, syntax) are
+  heavy for a 68k. On an A1200 with a 68030 at 14 MHz, `vim` takes about
+  20 seconds to start and opening a file 30 to 45; a faster accelerator
+  divides that. For a quick editor, put your own settings in `S:.vimrc`:
+  with a vimrc of your own Vim skips `defaults.vim`, so file type
+  detection and syntax highlighting stay off unless you turn them on
+  (`filetype plugin indent on`, `syntax on`).
 * **Text encoding:** `VIM:vimrc` makes Vim work in UTF-8 and show Latin-1,
   the Amiga's character set. UTF-8 and Latin-1 files both open correctly
   (`café` in either); characters Latin-1 doesn't have, like an em dash,
@@ -94,3 +101,15 @@ What `vim-amiga.patch` changes:
 * **`term.c`:** 8 ANSI colours with the `amiga` terminal when
   `TERM_PROGRAM=AmiBash`.
 * **`optiondefs.h`:** `regexpengine` defaults to 1 on the Amiga.
+* **`vim9cmds.c`:** the end of a compiled `while` loop is stored where
+  `ISN_WHILE` keeps it. Vim wrote it through the `ISN_JUMP` member of the
+  union, which only overlaps where an `int` is 4-byte aligned. On the 68k
+  every `while` in a `def` function jumped back to the function's start
+  and looped forever: opening a file whose type Vim guesses from its
+  contents (any `.txt`) hung with a blank screen.
+* **`highlight.c`:** the GUI colour names (`colors/lists/default.vim`) are
+  loaded when a name is looked up or `termguicolors` is on, not for every
+  colour scheme.
+* **`runtime/ftplugin/html.vim`, `autoload/htmlcomplete.vim`:** the HTML
+  flavour for completion is detected when completion is first used, not
+  by loading all of `htmlcomplete.vim` for every HTML and Markdown file.
