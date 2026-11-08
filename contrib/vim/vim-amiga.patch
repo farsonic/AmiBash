@@ -64,10 +64,65 @@ index 8dc3183..7fe1967 100644
  			    (char_u *)VAR_WIN, PV_RNU,
  			    did_set_number_relativenumber, NULL,
 diff --git a/src/os_amiga.c b/src/os_amiga.c
-index 1e36285..0c649cc 100644
+index 1e36285..f0b27fc 100644
 --- a/src/os_amiga.c
 +++ b/src/os_amiga.c
-@@ -410,6 +410,25 @@ mch_check_win(int argc, char **argv)
+@@ -158,6 +158,45 @@ mch_write(char_u *p, int len)
+     Write(raw_out, (char *)p, (long)len);
+ }
+ 
++/*
++ * Convert input from 'termencoding' to 'encoding', but pass the CSI byte
++ * (0x9b) through: it starts the console's key codes (cursor keys are
++ * CSI A), window reports and resize events, which must reach Vim as they
++ * are. Converted from Latin-1 it became two bytes and the keys were
++ * inserted as text. The rest of those sequences is ASCII.
++ */
++    static int
++convert_input_keep_csi(char_u *buf, int len, int maxlen)
++{
++    char_u  *src;
++    int	    i, s, o = 0;
++
++    if (memchr(buf, CSI, len) == NULL)
++	return convert_input(buf, len, maxlen);
++    src = alloc(len);
++    if (src == NULL)
++	return len;
++    mch_memmove(src, buf, len);
++    for (i = 0; i < len; )
++    {
++	if (src[i] == CSI)
++	{
++	    if (o < maxlen)
++		buf[o++] = CSI;
++	    ++i;
++	    continue;
++	}
++	for (s = i; i < len && src[i] != CSI; ++i)
++	    ;
++	if (o + (i - s) > maxlen)
++	    break;
++	mch_memmove(buf + o, src + s, i - s);
++	o += convert_input(buf + o, i - s, maxlen - o);
++    }
++    vim_free(src);
++    return o;
++}
++
+ /*
+  * mch_inchar(): low level input function.
+  * Get a characters from the keyboard.
+@@ -213,7 +252,7 @@ mch_inchar(
+ 	{
+ 	    // Convert from 'termencoding' to 'encoding'.
+ 	    if (input_conv.vc_type != CONV_NONE)
+-		len = convert_input(buf, len, maxlen);
++		len = convert_input_keep_csi(buf, len, maxlen);
+ 	    return len;
+ 	}
+     }
+@@ -410,6 +449,25 @@ mch_check_win(int argc, char **argv)
  		usewin = TRUE;
  		break;
  
@@ -93,7 +148,7 @@ index 1e36285..0c649cc 100644
  	    case 'd':
  		if (i < argc - 1
  #ifdef FEAT_DIFF
-@@ -1075,50 +1094,91 @@ mch_settmode(tmode_T tmode)
+@@ -1075,50 +1133,91 @@ mch_settmode(tmode_T tmode)
  #include <devices/conunit.h>
  
  /*
@@ -214,7 +269,7 @@ index 1e36285..0c649cc 100644
      Columns = 80;
      Rows = 24;
  
-@@ -1137,14 +1197,17 @@ mch_get_shellsize(void)
+@@ -1137,14 +1236,17 @@ mch_get_shellsize(void)
      char	    id_a[sizeof(struct InfoData) + 3];
  # endif
      struct InfoData *id=0;
@@ -235,7 +290,7 @@ index 1e36285..0c649cc 100644
  # else
      id = (struct InfoData *)(((long)id_a + 3L) & ~3L);
  # endif
-@@ -1154,7 +1217,7 @@ mch_get_shellsize(void)
+@@ -1154,7 +1256,7 @@ mch_get_shellsize(void)
       * Unfortunately, under DOS 2.0x this redraws the window and it
       * is rarely needed, so we skip it now, unless we changed the size.
       */
@@ -244,7 +299,7 @@ index 1e36285..0c649cc 100644
  	OUT_STR("\233t\233u");	// CSI t CSI u
      out_flush();
  
-@@ -1164,35 +1227,42 @@ mch_get_shellsize(void)
+@@ -1164,35 +1266,42 @@ mch_get_shellsize(void)
  	// it's not an amiga window, maybe aux device
  	// terminal type should be set
  	term_console = FALSE;
@@ -293,7 +348,7 @@ index 1e36285..0c649cc 100644
  }
  #endif
  
-@@ -1818,3 +1888,53 @@ mch_get_random(char_u *buf, int len)
+@@ -1818,3 +1927,53 @@ mch_get_random(char_u *buf, int len)
      Close(fh);
      return status;
  }

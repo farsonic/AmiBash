@@ -100,6 +100,11 @@ What `vim-amiga.patch` changes:
   window.
 * **`term.c`:** 8 ANSI colours with the `amiga` terminal when
   `TERM_PROGRAM=AmiBash`.
+* **`os_amiga.c`, input:** with `termencoding` set (as `VIM:vimrc` does),
+  typed text is converted from Latin-1 but the CSI byte (0x9b) is passed
+  through. It starts the console's key codes (cursor keys are `CSI A`),
+  window reports and resize events; converted, it became two bytes and the
+  cursor keys inserted `<9b>A` as text.
 * **`optiondefs.h`:** `regexpengine` defaults to 1 on the Amiga.
 * **`vim9cmds.c`:** the end of a compiled `while` loop is stored where
   `ISN_WHILE` keeps it. Vim wrote it through the `ISN_JUMP` member of the
