@@ -202,7 +202,7 @@ through its pages:
   TCP/IP stack needed).
 * **Text:** the font, and the window's size and place (below).
 
-Two profiles come ready-made: *Transparent* and *Amiga Shell*.
+A ready-made *Amiga Shell* profile comes with it.
 Changes show at once; *Use* keeps them for this session, *Save* in
 `ENVARC:AmiBash/terminal.prefs`, *Cancel* puts everything back. The
 profile marked `*` is the default; *AmiBash > New Tab with Profile*
@@ -213,14 +213,25 @@ window's size and place now; columns or rows 0 are the default size
 (nearly the screen's width and 4/5 of its height), left or top -1 the
 default place. *AmiBash > About AmiBash...* shows the version.
 
-**Transparent background.** AmigaOS 3 has no see-through windows, so a
-profile with *Transparent background* shows a snapshot of the screen
-behind the window, with the text on top. The snapshot is taken just before
-the window opens, and again after it is moved or resized; the window then
-goes to the back for a moment (a brief flicker) so that the snapshot shows
-what is behind it. Changes behind the window afterwards don't show until
-the next move. Text in colour backgrounds, the selection and the cursor
-stay solid.
+**Transparent background (NewOS glass).** With
+NewOS (NewOSDrawer) running and its transparency
+switched on, the terminal's background is NewOS glass. That's what is
+behind the window, tinted with the profile's background colour at the
+opacity set in NewOS Preferences:
+
+* **Dither:** any screen, including AGA and ECS.
+* **Alpha:** true-colour RTG with Picasso96.
+* **Composite:** Alpha, blurred.
+
+NewOS decides what shows: the windows behind (only smart-refresh windows
+keep their hidden pixels) or only the backdrop. *Transparent background*
+on the Colors page is on by default and is offered only while NewOS has
+transparency on. Without NewOS the terminal looks as before.
+
+The glass is painted again when the window moves, changes size or depth,
+or is activated, and when a NewOS setting changes (the terminal watches
+`ENV:NewOS/Theme`). Text in colour backgrounds, the selection and the
+cursor stay solid.
 
 **bash and the Amiga Shell.** **Amiga-S** (*AmiBash > Switch bash / Amiga
 Shell*) switches the tab:

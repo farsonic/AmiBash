@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include "sh.h"
 #include "term.h"
+#include "newostheme.h"
 
 extern struct Library *GadToolsBase, *AslBase, *UtilityBase;
 
@@ -231,6 +232,7 @@ static void prof_defaults(Profile *p, const char *name)
     p->boldcolor = 1;
     p->copysel = 1;
     p->dirmode = DIR_HOME;
+    p->transparent = 1;                  /* NewOS glass whenever it is there */
 }
 
 Profile *prof_find(const char *name)
@@ -377,13 +379,9 @@ void prof_load(void)
     if (b) FreeVec(b);
     prof_default();
     if (!extras) {
-        /* once, also into older prefs files: ready-made profiles for the
-         * transparent background and the Amiga Shell */
-        Profile *p = prof_find("Transparent") ? NULL : prof_new("Transparent", NULL);
-        if (p) {
-            preset_apply(2, p);             /* Workbench: black text */
-            p->transparent = 1;
-        }
+        /* once, also into older prefs files: a ready-made profile for
+         * the Amiga Shell */
+        Profile *p;
         if (!prof_find("Amiga Shell") && (p = prof_new("Amiga Shell", NULL)) != NULL) p->shell = SHELL_AMIGA;
         extras = 1;
     }
@@ -690,8 +688,10 @@ static struct Gadget *build_gadgets(void)
         y += bh + 2;
         g = mk(CHECKBOX_KIND, g, &ng, G_BRIGHTEN, rx, y, 26, fh + 4, "Brighten bold text", GTCB_Checked,
                (ULONG)p->brighten, GTCB_Scaled, TRUE, TAG_IGNORE, 0);
+        /* NewOS glass: offered only while NewOS has its transparency on */
         g = mk(CHECKBOX_KIND, g, &ng, G_TRANSP, rx + rw / 2, y, 26, fh + 4, "Transparent background",
-               GTCB_Checked, (ULONG)p->transparent, GTCB_Scaled, TRUE, TAG_IGNORE, 0);
+               GTCB_Checked, (ULONG)p->transparent, GTCB_Scaled, TRUE, GA_Disabled,
+               NT_GlassMode() == NTM_OFF);
         y += fh + 6;
         g = mk(CHECKBOX_KIND, g, &ng, G_BOLDCOLOR, rx, y, 26, fh + 4, "Bold text in the Bold colour",
                GTCB_Checked, (ULONG)p->boldcolor, GTCB_Scaled, TRUE, TAG_IGNORE, 0);
@@ -1011,6 +1011,11 @@ int prefs_open(struct Screen *scr, Profile *current, void (*apply)(Profile *), v
 }
 
 int prefs_is_open(void) { return pw != NULL; }
+
+void prefs_glass_changed(void)
+{
+    if (pw && pw->win && pw->page == 1) show_page();
+}
 
 ULONG prefs_signal(void)
 {

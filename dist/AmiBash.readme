@@ -40,7 +40,7 @@ Terminal.
 
 Terminal profiles are edited like iTerm2's, with its colour schemes:
 900+ from the iTerm2-Color-Schemes gallery, .itermcolors import, and a
-transparent background (a snapshot of the screen behind the window).
+transparent background (NewOS glass, when NewOS runs).
 Amiga-S switches a tab between bash and the Amiga Shell.
 
 amibash-update (68020+, needs AmiSSL v5 and a TCP/IP stack) checks

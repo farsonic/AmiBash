@@ -65,6 +65,7 @@ int   prefs_open(struct Screen *scr, Profile *current, void (*apply)(Profile *),
 ULONG prefs_signal(void);                /* 0 when closed */
 void  prefs_handle(void);
 void  prefs_close(void);
+void  prefs_glass_changed(void);    /* NewOS glass on/off: show the page again */
 int   prefs_is_open(void);
 
 #endif

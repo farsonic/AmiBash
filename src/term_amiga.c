@@ -28,6 +28,7 @@
 #include <dos/dos.h>
 #include <dos/dosextens.h>
 #include <dos/dostags.h>
+#include <dos/notify.h>
 #include <intuition/intuition.h>
 #include <intuition/screens.h>
 #include <intuition/gadgetclass.h>
@@ -51,6 +52,7 @@
 #include <proto/utility.h>
 #include <string.h>
 #include "term.h"
+#include "newostheme.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include "sh.h"
@@ -216,12 +218,17 @@ static int pens_obtained;
 /* tab bar geometry */
 static int plus_w;
 
-/* the transparent background (a profile's "transparent"): a snapshot of
- * the screen behind the window, taken before it opens and again after it
- * moves or changes size (AmigaOS 3 has no see-through windows) */
+/* the transparent background (a profile's "transparent"): NewOS glass
+ * (NewOSDrawer's window transparency), offered when NewOS runs with its
+ * transparency on; a copy of the glass painted, see glass_paint() */
 static struct BitMap *bg_bm;
-static int bg_x, bg_y, bg_w, bg_h;   /* where on the screen it was taken  */
+static int bg_x, bg_y, bg_w, bg_h;   /* where in the window it is         */
 static int bg_bx, bg_by, bg_bw, bg_bh;   /* the window box it was for */
+static void redraw_tab(Tab *t);
+/* ENV:NewOS/Theme changes with every NewOS setting: notified, the glass
+ * is painted again (allocated: the resident build has no static ones) */
+static struct NotifyRequest *nt_nr;
+static struct MsgPort *nt_port;
 
 /* width of each of n tabs: they share the bar, but none is wider than
  * TABCOLS characters (a single tab no longer fills the whole bar) */
@@ -242,6 +249,7 @@ static LONG sb_settop = -1;      /* last top we set                    */
 static int launched;             /* shells started successfully          */
 
 struct Library *UtilityBase;
+struct Library *LayersBase;          /* for NewOS glass (newostheme.c) */
 
 static BPTR dbgfh;
 static void dbg(const char *fmt, LONG a, LONG b, LONG c)
@@ -296,67 +304,60 @@ static void bg_free(void)
     bg_bm = NULL;
 }
 
-/* snapshot the screen in the box x, y, w, h (screen coordinates) */
-static void bg_grab(int x, int y, int w, int h)
+/* NewOS glass under the terminal: NT_FillGlass() paints the text area
+ * (what is behind, tinted with the profile's background colour at the
+ * user's NewOS opacity) and a copy is kept, to put back under letters as
+ * they are drawn again.  0 (no glass) if NewOS is not running, its
+ * transparency is off or it cannot do this screen.  Not between
+ * BeginRefresh() and EndRefresh(): NT_FillGlass() locks the LayerInfo. */
+static int glass_paint(void)
 {
-    struct BitMap *sbm = scr->RastPort.BitMap;
+    struct RastPort brp;
+    int w, h, y0;
     bg_free();
-    bg_bx = x;
-    bg_by = y;
-    bg_bw = w;
-    bg_bh = h;
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > scr->Width) w = scr->Width - x;
-    if (y + h > scr->Height) h = scr->Height - y;
-    if (w <= 0 || h <= 0) return;
-    bg_bm = AllocBitMap(w, h, GetBitMapAttr(sbm, BMA_DEPTH), BMF_MINPLANES, sbm);
-    if (!bg_bm) return;
-    BltBitMap(sbm, x, y, bg_bm, 0, 0, w, h, 0xC0, 0xFF, NULL);
-    bg_x = x;
-    bg_y = y;
+    if (!win || !curprof || NT_GlassMode() == NTM_OFF) return 0;
+    y0 = term_top();
+    w = win->GZZWidth;
+    h = win->GZZHeight - y0;
+    if (w <= 0 || h <= 0) return 0;
+    if (!NT_FillGlass(win, 0, y0, w - 1, y0 + h - 1, curprof->rgb[C_BG], -1)) return 0;
+    bg_bm = AllocBitMap(w, h, GetBitMapAttr(win->RPort->BitMap, BMA_DEPTH), BMF_MINPLANES, win->RPort->BitMap);
+    if (!bg_bm) return 0;
+    InitRastPort(&brp);
+    brp.BitMap = bg_bm;
+    ClipBlit(win->RPort, 0, y0, &brp, 0, 0, w, h, 0xC0);
+    bg_x = 0;
+    bg_y = y0;
     bg_w = w;
     bg_h = h;
+    bg_bx = win->LeftEdge;
+    bg_by = win->TopEdge;
+    bg_bw = win->Width;
+    bg_bh = win->Height;
+    return 1;
 }
 
-/* the window covers what is behind it: put it at the back for a moment
- * (behind other windows, in front of the Workbench backdrop), let the
- * windows that come out redraw, take the snapshot, bring it back */
-static void bg_regrab(void)
-{
-    if (!win) return;
-    WindowToBack(win);
-    Delay(12);
-    bg_grab(win->LeftEdge, win->TopEdge, win->Width, win->Height);
-    WindowToFront(win);
-    Delay(2);
-}
-
-/* is the active profile's background the snapshot? */
+/* is the active profile's background glass? */
 static int transparent(void)
 {
     return curprof && curprof->transparent && bg_bm;
 }
 
 /* paint window area x0..x1-1, y0..y1-1 (inner coordinates) from the
- * snapshot; what it does not cover in the background colour */
+ * glass kept; what it does not cover in the background colour */
 static void bg_fill(int x0, int y0, int x1, int y1)
 {
-    int ox = win->LeftEdge + win->BorderLeft - bg_x, oy = win->TopEdge + win->BorderTop - bg_y;
-    int a0 = x0, b0 = y0, a1 = x1, b1 = y1;
-    if (a0 + ox < 0) a0 = -ox;
-    if (b0 + oy < 0) b0 = -oy;
-    if (a1 + ox > bg_w) a1 = bg_w - ox;
-    if (b1 + oy > bg_h) b1 = bg_h - oy;
+    int a0 = x0 > bg_x ? x0 : bg_x, b0 = y0 > bg_y ? y0 : bg_y;
+    int a1 = x1 < bg_x + bg_w ? x1 : bg_x + bg_w, b1 = y1 < bg_y + bg_h ? y1 : bg_y + bg_h;
     if (a0 >= a1 || b0 >= b1 || a0 > x0 || b0 > y0 || a1 < x1 || b1 < y1) {
         SetAPen(win->RPort, pen_back);
         RectFill(win->RPort, x0, y0, x1 - 1, y1 - 1);
     }
     if (a0 < a1 && b0 < b1)
-        BltBitMapRastPort(bg_bm, a0 + ox, b0 + oy, win->RPort, a0, b0, a1 - a0, b1 - b0, 0xC0);
+        BltBitMapRastPort(bg_bm, a0 - bg_x, b0 - bg_y, win->RPort, a0, b0, a1 - a0, b1 - b0, 0xC0);
 }
 
-/* the window's background: the snapshot (transparent) or its colour */
+/* the window's background: glass (transparent) or its colour */
 static void fill_back(int x0, int y0, int x1, int y1)
 {
     if (x0 >= x1 || y0 >= y1) return;
@@ -367,15 +368,24 @@ static void fill_back(int x0, int y0, int x1, int y1)
     }
 }
 
-/* the snapshot for a transparent profile, if it is missing or was taken
- * for another place or size of the window */
+/* glass for a transparent profile if it is missing or was painted for
+ * another place or size of the window */
 static void bg_ensure(void)
 {
     if (!win || !curprof || !curprof->transparent) return;
     if (bg_bm && bg_bx == win->LeftEdge && bg_by == win->TopEdge && bg_bw == win->Width &&
         bg_bh == win->Height)
         return;
-    bg_regrab();
+    glass_paint();
+}
+
+/* paint the glass again (what is behind may have changed) and the tab
+ * on it */
+static void glass_again(void)
+{
+    if (!win || !curprof || !curprof->transparent || !active()) return;
+    bg_free();
+    redraw_tab(active());
 }
 
 /* pens for attribute a; TRUE if its background is the default one, which
@@ -3249,8 +3259,6 @@ static int open_window(int x, int y)
     if (y < 0) y = scr->BarHeight + 1;
     if (x + W > scr->Width) x = scr->Width - W > 0 ? scr->Width - W : 0;
     if (y + H > scr->Height) y = scr->Height - H > 0 ? scr->Height - H : 0;
-    /* the screen behind it, before it covers that (no flicker) */
-    if (prof_default() && prof_default()->transparent) bg_grab(x, y, W, H);
     win = OpenWindowTags(NULL,
                          WA_Left, x, WA_Top, y, WA_Width, W, WA_Height, H,
                          WA_MinWidth, 200, WA_MinHeight, 80, WA_MaxWidth, -1, WA_MaxHeight, -1,
@@ -3263,7 +3271,7 @@ static int open_window(int x, int y)
                          WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MOUSEBUTTONS |
                                        IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW | IDCMP_GADGETDOWN |
                                        IDCMP_GADGETUP | IDCMP_IDCMPUPDATE | IDCMP_MOUSEMOVE |
-                                       IDCMP_CHANGEWINDOW,
+                                       IDCMP_CHANGEWINDOW | IDCMP_REFRESHWINDOW,
                          TAG_END);
     if (!win) {
         bg_free();
@@ -3497,6 +3505,7 @@ static int open_libs(void)
     if (!DiskfontBase) DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
     if (!AslBase) AslBase = OpenLibrary((STRPTR)"asl.library", 38);     /* optional */
     if (!UtilityBase) UtilityBase = OpenLibrary((STRPTR)"utility.library", 37);
+    if (!LayersBase) LayersBase = OpenLibrary((STRPTR)"layers.library", 37);
     return IntuitionBase && GfxBase && GadToolsBase && KeymapBase;
 }
 
@@ -3575,6 +3584,21 @@ int term_main(const char *selfpath)
     SetVar((STRPTR)"AMIBASH_TERM", (STRPTR)"1", -1, GVF_LOCAL_ONLY);
     SetVar((STRPTR)"TERM_PROGRAM", (STRPTR)"AmiBash", -1, GVF_LOCAL_ONLY);
     SetVar((STRPTR)"AMIBASH_SELF", (STRPTR)NEARP(self), -1, GVF_LOCAL_ONLY);
+    /* NewOS glass: its settings, and a word when they change */
+    if (LayersBase && GfxBase->LibNode.lib_Version >= 39) {
+        NT_Init();
+        nt_port = CreateMsgPort();
+        nt_nr = AllocVec(sizeof(struct NotifyRequest), MEMF_PUBLIC | MEMF_CLEAR);
+        if (nt_port && nt_nr) {
+            nt_nr->nr_Name = (UBYTE *)"ENV:NewOS/Theme";
+            nt_nr->nr_Flags = NRF_SEND_MESSAGE;
+            nt_nr->nr_stuff.nr_Msg.nr_Port = nt_port;
+            if (!StartNotify(nt_nr)) {
+                FreeVec(nt_nr);
+                nt_nr = NULL;
+            }
+        }
+    }
     new_tab();
 
     for (;;) {
@@ -3620,13 +3644,28 @@ int term_main(const char *selfpath)
         if (alive == 0) break;
         tsig = timerport ? 1UL << timerport->mp_SigBit : 0;
         psig = pubport ? 1UL << pubport->mp_SigBit : 0;
-        all = tsig | psig | prefs_signal() | SIGBREAKF_CTRL_F;
+        all = tsig | psig | prefs_signal() | SIGBREAKF_CTRL_F | (nt_port ? 1UL << nt_port->mp_SigBit : 0);
         for (w = 0; w < MAXWIN; w++)
             if (win_of(w)) all |= 1UL << win_of(w)->UserPort->mp_SigBit;
         for (i = 0; i < MAXTABS; i++)
             if (tabs[i].used) all |= 1UL << tabs[i].port->mp_SigBit;
         if (Wait(all) & SIGBREAKF_CTRL_F) launch_done();
         if (prefs_is_open()) prefs_handle();
+        if (nt_port && nt_port->mp_MsgList.lh_TailPred != (struct Node *)&nt_port->mp_MsgList) {
+            /* NewOS settings changed (or NewOS quit): the glass of every
+             * window again, and whether Preferences may offer it */
+            struct Message *nm;
+            while ((nm = GetMsg(nt_port)) != NULL) ReplyMsg(nm);
+            for (w = 0; w < MAXWIN; w++) {
+                if (!wins[w]) continue;
+                switch_win(w);
+                if (curprof && curprof->transparent) {
+                    bg_free();
+                    if (active()) redraw_tab(active());
+                }
+            }
+            prefs_glass_changed();
+        }
         for (i = 0; i < MAXTABS; i++) {
             struct Message *m;
             struct MsgPort *pt;
@@ -3694,13 +3733,20 @@ int term_main(const char *selfpath)
                 case IDCMP_CLOSEWINDOW: close_window_tabs(); break;
                 case IDCMP_NEWSIZE: layout(); break;
                 case IDCMP_CHANGEWINDOW:
-                    /* moved or resized: a new snapshot behind it */
-                    if (curprof && curprof->transparent && active()) {
-                        bg_regrab();
-                        redraw_tab(active());
-                    }
+                    /* moved, resized, depth arranged: what is behind changed */
+                    glass_again();
                     break;
-                case IDCMP_ACTIVEWINDOW: actw = w; break;
+                case IDCMP_REFRESHWINDOW:
+                    /* end the refresh first: the glass locks the LayerInfo */
+                    BeginRefresh(win);
+                    EndRefresh(win, TRUE);
+                    if (curprof && curprof->transparent) glass_again();
+                    else if (active()) redraw_tab(active());
+                    break;
+                case IDCMP_ACTIVEWINDOW:
+                    actw = w;
+                    glass_again();          /* a cheap way to see changes behind */
+                    break;
                 case IDCMP_MENUPICK: actw = w; menu_pick(code); break;
                 case IDCMP_MOUSEBUTTONS:
                     actw = w;
@@ -3751,6 +3797,18 @@ int term_main(const char *selfpath)
         DeleteIORequest((struct IORequest *)treq);
     }
     if (timerport) DeleteMsgPort(timerport);
+    if (nt_nr) {
+        EndNotify(nt_nr);
+        FreeVec(nt_nr);
+        nt_nr = NULL;
+    }
+    if (nt_port) {
+        struct Message *nm;
+        while ((nm = GetMsg(nt_port)) != NULL) ReplyMsg(nm);
+        DeleteMsgPort(nt_port);
+        nt_port = NULL;
+    }
+    NT_Exit();
     prefs_close();
     for (w = 0; w < MAXWIN; w++)
         if (wins[w]) close_window(w);
