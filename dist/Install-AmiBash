@@ -1,4 +1,4 @@
-; $VER: Install-AmiBash 1.4 (28.10.2026)
+; $VER: Install-AmiBash 1.5 (10.11.2026)
 ;
 ; Installs AmiBash with the standard Amiga Installer (OS 3.x) or
 ; InstallerLG.  Double-click its icon, or from the Shell:
@@ -85,6 +85,9 @@
     ; checks GitHub for a newer AmiBash (AmiSSL v5, so 68020+)
     (if #has020
       (copyfiles (source (tackon #here "amibash-update")) (dest "C:") (nogauge)))
+    ; the iTerm2 colour schemes for the terminal's Presets page
+    (if (= (exists "ENVARC:AmiBash") 0) (makedir "ENVARC:AmiBash"))
+    (copyfiles (source (tackon #here "S/colorschemes")) (dest "ENVARC:AmiBash") (nogauge))
   ))
 
 ; ---- S:bashrc --------------------------------------------------------

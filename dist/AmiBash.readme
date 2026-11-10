@@ -38,6 +38,11 @@ top shows the tasks using the CPU (each task's share, sampled 50 or
 60 times a second), and memory, in a Shell window or the AmiBash
 Terminal.
 
+Terminal profiles are edited like iTerm2's, with its colour schemes:
+900+ from the iTerm2-Color-Schemes gallery, .itermcolors import, and a
+transparent background (a snapshot of the screen behind the window).
+Amiga-S switches a tab between bash and the Amiga Shell.
+
 amibash-update (68020+, needs AmiSSL v5 and a TCP/IP stack) checks
 GitHub for a newer AmiBash release; "amibash-update INSTALL" downloads
 it and starts its installer.  In the terminal: AmiBash > Check for

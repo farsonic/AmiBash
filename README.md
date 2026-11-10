@@ -170,6 +170,7 @@ use the new `bash.info`, or put that tool type in brackets.
 | drag, double-click, triple-click, Shift-click | select text (characters, a word, a line; extend), also into the scrollback |
 | **Amiga-C** / **Amiga-V** / **Amiga-A** | copy the selection, paste, select all (the Amiga clipboard) |
 | **Amiga-,** | Preferences: profiles, colours, font, start directory |
+| **Amiga-S** | switch this tab between bash and the Amiga Shell |
 
 The shortcuts work with either Amiga key and are also in the *AmiBash*,
 *Edit* and *View* menus.
@@ -179,12 +180,29 @@ right away (switch that off per profile) or with Amiga-C; Amiga-V types the
 clipboard into the shell. New output clears the selection.
 
 **Preferences and profiles.** *AmiBash > Preferences...* (Amiga-,) edits
-profiles, named sets of settings like in iTerm: the colours (foreground,
-background, bold, cursor, cursor text, selection, selected text and the 16
-ANSI colours, with presets such as Solarized Dark/Light, iTerm2, Workbench
-and Green screen), "brighten bold text", the font (or automatic), the
-directory new tabs start in (home, the previous tab's, or a fixed one),
-text sent to the shell at start, scrollback lines and copy-on-select.
+profiles, named sets of settings like in iTerm. P and Shift-P step
+through its pages:
+
+* **General:** the profile's name, its shell (bash or the Amiga Shell),
+  text sent to the shell at start, the directory new tabs start in (home,
+  the previous tab's, or a fixed one), scrollback lines and copy-on-select.
+* **Colors:** laid out like iTerm2's. Basic colours (foreground,
+  background, bold, selection, selected text) and cursor colours on the
+  left, the 16 ANSI colours (normal and bright) on the right. Click a
+  swatch to edit it with the R/G/B sliders. Also "brighten bold text",
+  bold text in the bold colour, and a transparent background.
+* **Presets:** colour schemes with a preview. The built-in ones, the more
+  than 900 of the [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+  gallery (MIT licence), and your own. Pick one with the mouse or the
+  cursor keys; *Apply* (or Return) puts it in the profile. *Import...*
+  reads an iTerm2 `.itermcolors` file, like those on
+  [iterm2colorschemes.com](https://iterm2colorschemes.com), and keeps it
+  in the list (`ENVARC:AmiBash/myschemes`). *Online...* fetches the
+  newest gallery from GitHub with `amibash-update SCHEMES` (AmiSSL and a
+  TCP/IP stack needed).
+* **Text:** the font, and the window's size and place (below).
+
+Two profiles come ready-made: *Transparent* and *Amiga Shell*.
 Changes show at once; *Use* keeps them for this session, *Save* in
 `ENVARC:AmiBash/terminal.prefs`, *Cancel* puts everything back. The
 profile marked `*` is the default; *AmiBash > New Tab with Profile*
@@ -194,6 +212,29 @@ opens (left, top), for all profiles: *Use current window* takes the
 window's size and place now; columns or rows 0 are the default size
 (nearly the screen's width and 4/5 of its height), left or top -1 the
 default place. *AmiBash > About AmiBash...* shows the version.
+
+**Transparent background.** AmigaOS 3 has no see-through windows, so a
+profile with *Transparent background* shows a snapshot of the screen
+behind the window, with the text on top. The snapshot is taken just before
+the window opens, and again after it is moved or resized; the window then
+goes to the back for a moment (a brief flicker) so that the snapshot shows
+what is behind it. Changes behind the window afterwards don't show until
+the next move. Text in colour backgrounds, the selection and the cursor
+stay solid.
+
+**bash and the Amiga Shell.** **Amiga-S** (*AmiBash > Switch bash / Amiga
+Shell*) switches the tab:
+
+* In bash, it starts an Amiga Shell in the tab. That's the `amigashell`
+  builtin, which you can also type. It runs `S:Shell-Startup` like
+  NewShell, and `EndShell` returns to bash.
+* In an Amiga Shell started from bash, it ends that Shell.
+* In a tab whose profile's shell is the Amiga Shell, it starts bash in the
+  Shell, and Amiga-S again leaves bash. `EndShell` there closes the tab, as
+  it closes a Shell window.
+
+The tab's title shows which shell is in front ("bash: ..." or "Amiga
+Shell"). With anything else in front, such as Vim, Amiga-S does nothing.
 
 **Fonts.** The terminal uses *AmiBashMono*, supplied in `Fonts/`: DejaVu
 Sans Mono drawn separately for every size from 10 to 43 pixels, using the

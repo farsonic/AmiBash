@@ -31,7 +31,11 @@ typedef struct Profile {
     char dir[160];
     char cmd[160];                       /* text sent to the shell at start */
     int scrollback;                      /* lines kept per tab */
+    int shell;                           /* SHELL_*: what a new tab runs */
+    int transparent;                     /* the screen behind as background */
 } Profile;
+
+enum { SHELL_BASH, SHELL_AMIGA };
 
 extern Profile *profiles;                /* all of them, in order */
 extern char default_profile[32];

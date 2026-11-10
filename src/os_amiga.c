@@ -1367,6 +1367,34 @@ static int count_bash_windows(int *maxnum)
     return cnt;
 }
 
+/* amigashell: an AmigaDOS Shell reading this console ("*") until EndShell,
+ * after S:Shell-Startup like a NewShell.  Execute() waits for it and leaves
+ * both handles open. */
+int os_amiga_shell(void)
+{
+    BPTR in, out, l;
+    LONG ok;
+    in = Open((STRPTR)"*", MODE_OLDFILE);
+    if (!in) {
+        last_err = IoErr();
+        return -1;
+    }
+    out = Open((STRPTR)"*", MODE_NEWFILE);
+    if (!out) {
+        last_err = IoErr();
+        Close(in);
+        return -1;
+    }
+    if ((l = Lock((STRPTR)"S:Shell-Startup", SHARED_LOCK)) != 0) UnLock(l);
+    ok = Execute((STRPTR)(l ? "Execute S:Shell-Startup" : ""), in, out);
+    if (!ok) last_err = IoErr();
+    /* EndShell's "Process n ending" has no newline */
+    else Write(out, (STRPTR)"\n", 1);
+    Close(out);
+    Close(in);
+    return ok ? 0 : -1;
+}
+
 static char winspec_tt[160];     /* WINDOW tool type from our icon */
 int os_new_window_only(void);
 

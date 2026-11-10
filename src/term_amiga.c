@@ -146,6 +146,12 @@ typedef struct Tab {
      * (Vim, less, ...) read the size of the window from its ConUnit */
     struct IOStdReq *cio;
     int sizerep;                 /* CSI 12 {: report size changes      */
+    /* titles kept by CSI 22 t, given back by CSI 23 t: a shell started in
+     * the tab keeps the one before it (bash in an Amiga Shell, amigashell
+     * in bash), so the title says which shell is in front */
+    char tstack[4][64];
+    int tsp;
+    int ashell;                  /* started as an Amiga Shell          */
 } Tab;
 
 static Tab *tabs;                /* MAXTABS of them                    */
@@ -168,7 +174,7 @@ enum {
     CMD_NEWTAB = 1, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
     CMD_COPY, CMD_PASTE, CMD_SELALL,
     CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE, CMD_FONT, CMD_ABOUT, CMD_CHECKUPD,
-    CMD_NEWWIN, CMD_TABLEFT, CMD_TABRIGHT, CMD_DETACH, CMD_MERGE,
+    CMD_NEWWIN, CMD_TABLEFT, CMD_TABRIGHT, CMD_DETACH, CMD_MERGE, CMD_SHELL,
     CMD_PROFILE = 100                    /* + n: new tab with the n-th profile */
 };
 #define MAXPROFMENU 16
@@ -209,6 +215,13 @@ static int pens_obtained;
 
 /* tab bar geometry */
 static int plus_w;
+
+/* the transparent background (a profile's "transparent"): a snapshot of
+ * the screen behind the window, taken before it opens and again after it
+ * moves or changes size (AmigaOS 3 has no see-through windows) */
+static struct BitMap *bg_bm;
+static int bg_x, bg_y, bg_w, bg_h;   /* where on the screen it was taken  */
+static int bg_bx, bg_by, bg_bw, bg_bh;   /* the window box it was for */
 
 /* width of each of n tabs: they share the bar, but none is wider than
  * TABCOLS characters (a single tab no longer fills the whole bar) */
@@ -275,9 +288,102 @@ static LONG pen_bg(UWORD a)
     return (a & A_DEFBG) ? pen_back : penv[C_ANSI + A_BG(a)];
 }
 
-static void set_pens(UWORD a)
+/* ---- the transparent background ---- */
+
+static void bg_free(void)
+{
+    if (bg_bm) FreeBitMap(bg_bm);
+    bg_bm = NULL;
+}
+
+/* snapshot the screen in the box x, y, w, h (screen coordinates) */
+static void bg_grab(int x, int y, int w, int h)
+{
+    struct BitMap *sbm = scr->RastPort.BitMap;
+    bg_free();
+    bg_bx = x;
+    bg_by = y;
+    bg_bw = w;
+    bg_bh = h;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > scr->Width) w = scr->Width - x;
+    if (y + h > scr->Height) h = scr->Height - y;
+    if (w <= 0 || h <= 0) return;
+    bg_bm = AllocBitMap(w, h, GetBitMapAttr(sbm, BMA_DEPTH), BMF_MINPLANES, sbm);
+    if (!bg_bm) return;
+    BltBitMap(sbm, x, y, bg_bm, 0, 0, w, h, 0xC0, 0xFF, NULL);
+    bg_x = x;
+    bg_y = y;
+    bg_w = w;
+    bg_h = h;
+}
+
+/* the window covers what is behind it: put it at the back for a moment
+ * (behind other windows, in front of the Workbench backdrop), let the
+ * windows that come out redraw, take the snapshot, bring it back */
+static void bg_regrab(void)
+{
+    if (!win) return;
+    WindowToBack(win);
+    Delay(12);
+    bg_grab(win->LeftEdge, win->TopEdge, win->Width, win->Height);
+    WindowToFront(win);
+    Delay(2);
+}
+
+/* is the active profile's background the snapshot? */
+static int transparent(void)
+{
+    return curprof && curprof->transparent && bg_bm;
+}
+
+/* paint window area x0..x1-1, y0..y1-1 (inner coordinates) from the
+ * snapshot; what it does not cover in the background colour */
+static void bg_fill(int x0, int y0, int x1, int y1)
+{
+    int ox = win->LeftEdge + win->BorderLeft - bg_x, oy = win->TopEdge + win->BorderTop - bg_y;
+    int a0 = x0, b0 = y0, a1 = x1, b1 = y1;
+    if (a0 + ox < 0) a0 = -ox;
+    if (b0 + oy < 0) b0 = -oy;
+    if (a1 + ox > bg_w) a1 = bg_w - ox;
+    if (b1 + oy > bg_h) b1 = bg_h - oy;
+    if (a0 >= a1 || b0 >= b1 || a0 > x0 || b0 > y0 || a1 < x1 || b1 < y1) {
+        SetAPen(win->RPort, pen_back);
+        RectFill(win->RPort, x0, y0, x1 - 1, y1 - 1);
+    }
+    if (a0 < a1 && b0 < b1)
+        BltBitMapRastPort(bg_bm, a0 + ox, b0 + oy, win->RPort, a0, b0, a1 - a0, b1 - b0, 0xC0);
+}
+
+/* the window's background: the snapshot (transparent) or its colour */
+static void fill_back(int x0, int y0, int x1, int y1)
+{
+    if (x0 >= x1 || y0 >= y1) return;
+    if (transparent()) bg_fill(x0, y0, x1, y1);
+    else {
+        SetAPen(win->RPort, pen_back);
+        RectFill(win->RPort, x0, y0, x1 - 1, y1 - 1);
+    }
+}
+
+/* the snapshot for a transparent profile, if it is missing or was taken
+ * for another place or size of the window */
+static void bg_ensure(void)
+{
+    if (!win || !curprof || !curprof->transparent) return;
+    if (bg_bm && bg_bx == win->LeftEdge && bg_by == win->TopEdge && bg_bw == win->Width &&
+        bg_bh == win->Height)
+        return;
+    bg_regrab();
+}
+
+/* pens for attribute a; TRUE if its background is the default one, which
+ * a transparent profile does not paint */
+static int set_pens(UWORD a)
 {
     LONG fg = pen_fg(a), bg = pen_bg(a);
+    int defbg = (a & A_DEFBG) && !(a & (A_INV | A_SEL));
     if (a & A_INV) {
         LONG t = fg;
         fg = bg;
@@ -290,6 +396,7 @@ static void set_pens(UWORD a)
     SetAPen(win->RPort, fg);
     SetBPen(win->RPort, bg);
     SetDrMd(win->RPort, JAM2);
+    return defbg;
 }
 
 /* the pens of a profile's colours: exact ones where the screen has free
@@ -373,7 +480,11 @@ static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
         UWORD a = cell_attr(t, l, at, x);
         int s = x;
         while (x < x1 && cell_attr(t, l, at, x) == a) x++;
-        set_pens(a);
+        if (set_pens(a) && transparent()) {
+            /* the snapshot behind the letters */
+            bg_fill(s * cw, term_top() + y * chh, x * cw, term_top() + (y + 1) * chh);
+            SetDrMd(win->RPort, JAM1);
+        }
         Move(win->RPort, s * cw, term_top() + y * chh + base);
         if ((a & A_BOLD) && boldfont && win->RPort->Font == ownfont) {
             /* TrueType: the font's own bold face */
@@ -386,10 +497,11 @@ static void draw_cells(int y, const UBYTE *c, const UWORD *at, int x0, int x1)
          * overprinting smears anti-aliased TrueType letters, so a TrueType
          * font without a bold face shows bold by its brighter colour only */
         if ((a & A_BOLD) && !scalable) {
+            int dm = win->RPort->DrawMode;
             SetDrMd(win->RPort, JAM1);
             Move(win->RPort, s * cw + 1, term_top() + y * chh + base);
             txt(win->RPort, (const char *)&c[s], x - s);
-            SetDrMd(win->RPort, JAM2);
+            SetDrMd(win->RPort, dm);
         }
         if (a & A_ULINE) {
             Move(win->RPort, s * cw, term_top() + y * chh + base + 1);
@@ -437,7 +549,8 @@ static void damage_flush(Tab *t)
     int y;
     batching = 0;
     if (t == active() && win && !t->view) {
-        if (pend_scroll >= rows) {
+        if (pend_scroll >= rows || (pend_scroll > 0 && transparent())) {
+            /* (the snapshot must not scroll along: everything again) */
             for (y = 0; y < rows && y < DMAXROWS; y++) {
                 dmin(y) = 0;
                 dmax(y) = (WORD)cols;
@@ -519,8 +632,8 @@ static void redraw_tab(Tab *t)
     int y;
     if (!t || !win) return;
     cur_shown = 0;
-    SetAPen(win->RPort, pen_back);
-    RectFill(win->RPort, 0, term_top(), win->GZZWidth - 1, win->GZZHeight - 1);
+    bg_ensure();
+    fill_back(0, term_top(), win->GZZWidth, win->GZZHeight);
     for (y = 0; y < rows; y++) {
         UBYTE *c;
         UWORD *a;
@@ -584,7 +697,7 @@ static void scroll_view(Tab *t, int n)
     t->view = v;
     sb_dirty = 1;
     if (t != active() || !win) return;
-    if (n < rows && -n < rows) {
+    if (n < rows && -n < rows && !transparent()) {
         /* move what is shown and draw only the lines that come in */
         int y, y0 = n > 0 ? 0 : rows + n, y1 = n > 0 ? n : rows;
         SetBPen(win->RPort, pen_back);
@@ -826,6 +939,9 @@ static void scroll_up(Tab *t, int n)
             dmin(y) = y + n < rows ? dmin(y + n) : 0;
             dmax(y) = y + n < rows ? dmax(y + n) : (WORD)cols;
         }
+    } else if (t == active() && win && !t->view && transparent()) {
+        int y;
+        for (y = 0; y < rows; y++) draw_run(t, y, 0, cols);
     } else if (t == active() && win && !t->view) {
         SetBPen(win->RPort, pen_bg(t->attr));
         ScrollRaster(win->RPort, 0, n * chh, 0, term_top(), cols * cw - 1, term_top() + rows * chh - 1);
@@ -1145,6 +1261,18 @@ static void csi(Tab *t, char final)
     case 'm': sgr(t); break;
     case 's': t->sx = t->cx; t->sy = t->cy; break;
     case 'u': t->cx = t->sx; t->cy = t->sy; break;
+    case 't':                            /* xterm: push / pop the title */
+        if (par(t, 0, 0) == 22) {
+            if (t->tsp < 4) strcpy(t->tstack[t->tsp], t->title);
+            t->tsp++;
+        } else if (par(t, 0, 0) == 23 && t->tsp > 0) {
+            if (--t->tsp < 4) {
+                strcpy(t->title, t->tstack[t->tsp]);
+                draw_tabbar();
+                if (t == active()) update_title();
+            }
+        }
+        break;
     case 'n':
         if (par(t, 0, 0) == 6) {
             char r[32];
@@ -1583,6 +1711,7 @@ static struct {
     BPTR in, out, path, dir;
     struct MsgPort *port;
     Tab *tab;
+    int ashell;                             /* an Amiga Shell, not bash */
     struct Task *parent;
     LONG result;
     volatile int busy;
@@ -1618,7 +1747,10 @@ static void launcher(void)
         struct Process *p = CreateNewProcTags(
             NP_Seglist, seg, NP_FreeSeglist, own, NP_Name, (ULONG)"AmiBash",
             NP_Input, launch.in, NP_Output, launch.out, NP_CloseInput, TRUE, NP_CloseOutput, TRUE,
-            NP_Cli, TRUE, NP_CommandName, (ULONG)"bash", NP_Arguments, (ULONG)"-i --amiterm\n",
+            NP_Cli, TRUE, NP_CommandName, (ULONG)"bash",
+            /* an Amiga Shell tab: bash runs it (amigashell) and ends with
+             * it, as a Shell window closes on EndShell */
+            NP_Arguments, (ULONG)(launch.ashell ? "--amiterm -c amigashell\n" : "-i --amiterm\n"),
             NP_Path, launch.path, NP_Error, launch.out, NP_CloseError, FALSE,
             launch.dir ? NP_CurrentDir : TAG_IGNORE, launch.dir,
             NP_ConsoleTask, (ULONG)launch.port, NP_StackSize, 65536, TAG_END);
@@ -1732,7 +1864,8 @@ static int new_tab_with(Profile *prof)
     if (!t->port) return -1;
     t->used = 1;
     t->cursor_on = 1;
-    strcpy(t->title, "bash");
+    t->ashell = prof && prof->shell == SHELL_AMIGA;
+    strcpy(t->title, t->ashell ? "Amiga Shell" : "bash");
     alloc_cells(t);
     if (!t->ch || !t->at) {
         DeleteMsgPort(t->port);
@@ -1771,6 +1904,7 @@ static int new_tab_with(Profile *prof)
     launch.path = copy_path();
     launch.dir = prof ? profile_dir(prof) : 0;
     launch.tab = t;
+    launch.ashell = t->ashell;
     launch.parent = FindTask(NULL);
     launch.busy = 1;
     Forbid();               /* it must not run before tc_UserData is set */
@@ -1934,11 +2068,11 @@ static void key_event(struct IntuiMessage *im)
     if (q & IEQUALIFIER_LCOMMAND) {
         /* Left-Amiga works like Right-Amiga for the tab shortcuts (it is
          * where Command is on a Mac keyboard under an emulator) */
-        static const char keys[] = "tw[],qcva+-0f?undm<>";
+        static const char keys[] = "tw[],qcva+-0f?undm<>s";
         static const UBYTE kcmd[] = {CMD_NEWTAB, CMD_CLOSETAB, CMD_PREVTAB, CMD_NEXTTAB, CMD_PREFS, CMD_QUIT,
                                      CMD_COPY, CMD_PASTE, CMD_SELALL, CMD_BIGGER, CMD_SMALLER, CMD_DEFSIZE,
                                      CMD_FONT, CMD_ABOUT, CMD_CHECKUPD, CMD_NEWWIN, CMD_DETACH, CMD_MERGE,
-                                     CMD_TABLEFT, CMD_TABRIGHT};
+                                     CMD_TABLEFT, CMD_TABRIGHT, CMD_SHELL};
         n = MapRawKey(&ie, (STRPTR)buf, sizeof(buf), NULL);
         if (n == 1 && buf[0]) {
             const char *k = strchr(keys, buf[0] == '=' ? '+' : (buf[0] >= 'A' && buf[0] <= 'Z') ? buf[0] | 0x20 : buf[0]);
@@ -2050,10 +2184,7 @@ static void layout(void)
     sb_dirty = 1;
     draw_tabbar();
     if (active()) redraw_tab(active());
-    else {
-        SetAPen(win->RPort, pen_back);
-        RectFill(win->RPort, 0, tabh, win->GZZWidth - 1, win->GZZHeight - 1);
-    }
+    else fill_back(0, tabh, win->GZZWidth, win->GZZHeight);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2790,6 +2921,7 @@ static void build_menus(void)
     for (p = profiles; p && n < MAXPROFMENU; p = p->next, n++) NMI(NM_SUB, p->name, 0, CMD_PROFILE + n);
     NMI(NM_ITEM, "New Window", "N", CMD_NEWWIN);
     NMI(NM_ITEM, "Close Tab", "W", CMD_CLOSETAB);
+    NMI(NM_ITEM, "Switch bash / Amiga Shell", "S", CMD_SHELL);
     NMI(NM_ITEM, NM_BARLABEL, 0, 0);
     NMI(NM_ITEM, "Previous Tab", "[", CMD_PREVTAB);
     NMI(NM_ITEM, "Next Tab", "]", CMD_NEXTTAB);
@@ -2818,6 +2950,32 @@ static void build_menus(void)
 
 static void prefs_apply(Profile *p);
 static void prefs_changed(void);
+
+/* "Switch bash / Amiga Shell": type what starts the other shell in the tab
+ * (amigashell in bash, bash in an Amiga Shell), or what ends the one in
+ * front if the other started it.  The title says which shell is in front
+ * and the title it pushed (CSI 22 t) what is behind it; anything else in
+ * front (Vim, ...) is left alone. */
+static void switch_shell(Tab *t)
+{
+    const char *below;
+    char cmd[300];
+    if (!t || t->closing) return;
+    below = t->tsp > 0 && t->tsp <= 4 ? t->tstack[t->tsp - 1] : "";
+    if (strncmp(t->title, "bash", 4) == 0) {
+        /* ^U: drop what was typed on the command line */
+        strcpy(cmd, strncmp(below, "Amiga Shell", 11) == 0 ? "\025exit\r" : "\025amigashell\r");
+    } else if (strncmp(t->title, "Amiga Shell", 11) == 0) {
+        t->ll = 0;                          /* a half-typed line */
+        /* the Shell reads lines in cooked mode: \n, not \r */
+        if (strncmp(below, "bash", 4) == 0) strcpy(cmd, "EndShell\n");
+        else sprintf(cmd, "\"%.250s\" -i --amiterm\n", (char *)NEARP(self));
+    } else {
+        DisplayBeep(scr);
+        return;
+    }
+    queue_input(t, cmd, (int)strlen(cmd));
+}
 
 static void tell(const char *title, const char *text)
 {
@@ -2884,6 +3042,7 @@ static void do_cmd(int cmd)
     case CMD_DEFSIZE: zoom(0); break;
     case CMD_FONT: font_requester(); break;
     case CMD_ABOUT: about(); break;
+    case CMD_SHELL: switch_shell(active()); break;
     case CMD_CHECKUPD: check_update(); break;
     case CMD_NEWWIN:
         if (open_window(-1, -1) < 0 || new_tab() < 0) DisplayBeep(scr);
@@ -2952,6 +3111,8 @@ typedef struct WinCtx {
     char applied_font[64];
     int applied_cols, applied_rows, applied_left, applied_top;
     int drag_tab, drag_x, drag_moved;
+    struct BitMap *bg_bm;
+    int bg_x, bg_y, bg_w, bg_h, bg_bx, bg_by, bg_bw, bg_bh;
     char title[80];                  /* the window's title (not copied) */
 } WinCtx;
 
@@ -2967,7 +3128,7 @@ static WinCtx *noctx;            /* "no window": for tabs whose window closed */
     dir(sb_down); dir(img_size); dir(img_up); dir(img_down); dir(sb_dirty); dir(sb_held); \
     dir(sb_settop); dir(cur_shown); dir(cur_x); dir(cur_y); dir(nsizes); dir(font_default); \
     dir(applied_cols); dir(applied_rows); dir(applied_left); dir(applied_top); dir(drag_tab); \
-    dir(drag_x); dir(drag_moved)
+    dir(drag_x); dir(drag_moved); dir(bg_bm); dir(bg_x); dir(bg_y); dir(bg_w); dir(bg_h); dir(bg_bx); dir(bg_by); dir(bg_bw); dir(bg_bh)
 #define TO_CTX(f) c->f = f
 #define FROM_CTX(f) f = c->f
 
@@ -3088,6 +3249,8 @@ static int open_window(int x, int y)
     if (y < 0) y = scr->BarHeight + 1;
     if (x + W > scr->Width) x = scr->Width - W > 0 ? scr->Width - W : 0;
     if (y + H > scr->Height) y = scr->Height - H > 0 ? scr->Height - H : 0;
+    /* the screen behind it, before it covers that (no flicker) */
+    if (prof_default() && prof_default()->transparent) bg_grab(x, y, W, H);
     win = OpenWindowTags(NULL,
                          WA_Left, x, WA_Top, y, WA_Width, W, WA_Height, H,
                          WA_MinWidth, 200, WA_MinHeight, 80, WA_MaxWidth, -1, WA_MaxHeight, -1,
@@ -3099,9 +3262,11 @@ static int open_window(int x, int y)
                          WA_PubScreen, (ULONG)scr,
                          WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_MOUSEBUTTONS |
                                        IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW | IDCMP_GADGETDOWN |
-                                       IDCMP_GADGETUP | IDCMP_IDCMPUPDATE | IDCMP_MOUSEMOVE,
+                                       IDCMP_GADGETUP | IDCMP_IDCMPUPDATE | IDCMP_MOUSEMOVE |
+                                       IDCMP_CHANGEWINDOW,
                          TAG_END);
     if (!win) {
+        bg_free();
         free_scroller();
         switch_win(-1);
         wins[w] = NULL;
@@ -3140,6 +3305,7 @@ static void close_window(int w)
     if (nmenu) FreeVec(nmenu);
     nmenu = NULL;
     free_scroller();
+    bg_free();
     if (boldfont) CloseFont(boldfont);
     boldfont = NULL;
     if (ownfont) CloseFont(ownfont);
@@ -3527,6 +3693,13 @@ int term_main(const char *selfpath)
                 case IDCMP_IDCMPUPDATE: scroller_moved(); break;
                 case IDCMP_CLOSEWINDOW: close_window_tabs(); break;
                 case IDCMP_NEWSIZE: layout(); break;
+                case IDCMP_CHANGEWINDOW:
+                    /* moved or resized: a new snapshot behind it */
+                    if (curprof && curprof->transparent && active()) {
+                        bg_regrab();
+                        redraw_tab(active());
+                    }
+                    break;
                 case IDCMP_ACTIVEWINDOW: actw = w; break;
                 case IDCMP_MENUPICK: actw = w; menu_pick(code); break;
                 case IDCMP_MOUSEBUTTONS:

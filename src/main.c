@@ -18,9 +18,12 @@ static const char ver[] = "$VER: bash " AMIBASH_SHORTVER " (" AMIBASH_DATE ") Am
 
 Shell sh;
 
+static int title_pushed;         /* the AmiBash Terminal's title, see main() */
+
 void sh_exit(int status)
 {
     run_exit_trap();
+    if (title_pushed) sh_puts(1, "\033[23;0t");
     sh_flush_all();
     if (sh.interactive && sh.opt_history) {
         const char *hf = var_get("HISTFILE");
@@ -405,6 +408,12 @@ int main(int argc, char **argv)
     if (i < argc) params_set(argv + i, argc - i);
 
     sh.interactive = force_inter || (os_isatty(os_stdin()) && os_isatty(os_stdout()));
+    if (sh.interactive && var_get("AMIBASH_TERM")) {
+        /* keep the tab's title (an Amiga Shell's, when bash runs in one)
+         * to give it back when this bash ends */
+        sh_puts(1, "\033[22;0t");
+        title_pushed = 1;
+    }
     if (sh.interactive) {
         sh.sh_expand_aliases = 1;
         sh.opt_histexpand = 1;

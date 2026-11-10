@@ -3,6 +3,8 @@
  *
  *   amibash-update            compare C:bash with the latest release
  *   amibash-update INSTALL    download that release and start its installer
+ *   amibash-update SCHEMES    get the newest colour schemes (the terminal's
+ *                             Presets page) into ENVARC:AmiBash/colorschemes
  *
  * It asks GitHub's API for the latest release of farsonic/AmiBash (or
  * REPO=owner/name), compares its tag (v0.2) with the version in C:bash's
@@ -429,11 +431,55 @@ static int install(const char *url)
     return st == 0;
 }
 
+/* SCHEMES: dist/colorschemes of the repository (the iTerm2-Color-Schemes
+ * gallery, converted by tools/itermcolors.py), checked, then put where the
+ * terminal's preferences read it */
+#define SCHEMESFILE "ENVARC:AmiBash/colorschemes"
+static int get_schemes(const char *repo)
+{
+    char url[300];
+    Sink s;
+    int st, lines = 0;
+    const char *p;
+    BPTR fh, l;
+    memset(&s, 0, sizeof(s));
+    sprintf(url, "https://raw.githubusercontent.com/%.150s/main/dist/colorschemes", repo);
+    printf("Getting the colour schemes from GitHub...\n");
+    st = https_get(url, "text/plain", &s);
+    if (st != 200 || !s.buf) {
+        if (st) printf("GitHub answered %d.\n", st);
+        free(s.buf);
+        return 0;
+    }
+    /* NAME<TAB>23 colours a line: count the lines that look like that */
+    for (p = s.buf; p && *p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : NULL) {
+        const char *t = strchr(p, '\t'), *e = strchr(p, '\n');
+        if (t && (!e || t < e) && (e ? e - t : (long)strlen(t)) >= 23 * 7) lines++;
+    }
+    if (lines < 10) {
+        printf("That is not a list of colour schemes.\n");
+        free(s.buf);
+        return 0;
+    }
+    if ((l = Lock((STRPTR)"ENVARC:AmiBash", SHARED_LOCK)) != 0) UnLock(l);
+    else if ((l = CreateDir((STRPTR)"ENVARC:AmiBash")) != 0) UnLock(l);
+    if (!(fh = Open((STRPTR)SCHEMESFILE, MODE_NEWFILE)) || Write(fh, s.buf, s.len) != s.len) {
+        printf("Can't write " SCHEMESFILE ".\n");
+        if (fh) Close(fh);
+        free(s.buf);
+        return 0;
+    }
+    Close(fh);
+    free(s.buf);
+    printf("%d colour schemes in " SCHEMESFILE ".\n", lines);
+    return 1;
+}
+
 /* ---- main ------------------------------------------------------------------------- */
 
 int main(void)
 {
-    enum { A_INSTALL, A_FORCE, A_REPO, A_CAFILE, A_BASH, A_API, A_N };
+    enum { A_INSTALL, A_FORCE, A_REPO, A_CAFILE, A_BASH, A_API, A_SCHEMES, A_N };
     LONG a[A_N] = {0};
     struct RDArgs *ra;
     const char *repo, *bash, *api;
@@ -444,14 +490,18 @@ int main(void)
 
     (void)ver;
     memset(&s, 0, sizeof(s));
-    if (!(ra = ReadArgs((STRPTR)"INSTALL/S,FORCE/S,REPO/K,CAFILE/K,BASH/K,API/K", a, NULL))) {
+    if (!(ra = ReadArgs((STRPTR)"INSTALL/S,FORCE/S,REPO/K,CAFILE/K,BASH/K,API/K,SCHEMES/S", a, NULL))) {
         PrintFault(IoErr(), (STRPTR)"amibash-update");
-        printf("usage: amibash-update [INSTALL] [FORCE] [REPO=owner/name] [CAFILE=file] [BASH=path]\n");
+        printf("usage: amibash-update [INSTALL] [FORCE] [SCHEMES] [REPO=owner/name] [CAFILE=file] [BASH=path]\n");
         return RETURN_FAIL;
     }
     repo = a[A_REPO] ? (const char *)a[A_REPO] : "farsonic/AmiBash";
     bash = a[A_BASH] ? (const char *)a[A_BASH] : "C:bash";
     api = a[A_API] ? (const char *)a[A_API] : "https://api.github.com";
+    if (a[A_SCHEMES]) {
+        if (ssl_open((const char *)a[A_CAFILE]) && get_schemes(repo)) rc = RETURN_OK;
+        goto out;
+    }
     if (!installed_version(bash, have, sizeof(have)) && strcmp(bash, "C:bash") &&
         installed_version("C:bash", have, sizeof(have)))
         bash = "C:bash";                /* BASH= was the name of a resident one */

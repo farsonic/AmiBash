@@ -33,7 +33,7 @@ mkdir -p "$R/AmiBash/Icons"
 python3 tools/mkicon.py "$R/AmiBash/Icons/Terminal.info" C:bash >/dev/null
 cp -r dist/Fonts "$R/AmiBash/"
 cp tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py tools/mkinfo.py "$R/AmiBash/tools/"
-cp dist/S/bashrc "$R/AmiBash/S/"
+cp dist/S/bashrc dist/colorschemes "$R/AmiBash/S/"
 cp README.md LICENSE dist/AmiBash.readme "$R/AmiBash/"
 cp src/*.c src/*.h Makefile "$R/AmiBash/src/"
 # icons, so that Workbench shows everything without "Show all files"
@@ -42,7 +42,7 @@ icon drawer "$R/AmiBash.info"
 for d in S Fonts Icons SSH Vim tools src; do icon drawer "$R/AmiBash/$d.info"; done
 cp dist/bash.info "$R/AmiBash/bash020.info"
 for f in InstallTTF top amibash-update SSH/ssh SSH/ssh-keygen Vim/vim; do icon tool "$R/AmiBash/$f.info"; done
-for f in README.md LICENSE AmiBash.readme S/bashrc SSH/ssh.readme SSH/ssh-copy-id Vim/vim.readme \
+for f in README.md LICENSE AmiBash.readme S/bashrc S/colorschemes SSH/ssh.readme SSH/ssh-copy-id Vim/vim.readme \
          tools/pcf2amigafont.py tools/ttf2amigafont.py tools/mkicon.py tools/mkinfo.py; do
     icon doc "$R/AmiBash/$f.info"
 done

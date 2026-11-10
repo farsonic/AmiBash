@@ -1,9 +1,22 @@
 # amibash-update
 
-Checks GitHub for a newer AmiBash and, with `INSTALL`, installs it.
+Checks GitHub for a newer AmiBash and, with `INSTALL`, installs it. With
+`SCHEMES` it gets the newest colour schemes instead.
 
 ```
-amibash-update [INSTALL] [FORCE] [REPO=owner/name] [CAFILE=file] [BASH=path]
+amibash-update [INSTALL] [FORCE] [SCHEMES] [REPO=owner/name] [CAFILE=file] [BASH=path]
+```
+
+`SCHEMES` downloads `dist/colorschemes` from the repository's `main` branch.
+That's the iTerm2-Color-Schemes gallery, converted by `tools/itermcolors.py`.
+It checks that the file holds colour schemes and writes it to
+`ENVARC:AmiBash/colorschemes`, which the terminal's *Presets* page reads.
+The page's *Online...* button runs this. To renew the file in the
+repository:
+
+```sh
+git clone --depth 1 https://github.com/mbadolato/iTerm2-Color-Schemes /tmp/itcs
+python3 tools/itermcolors.py /tmp/itcs/schemes $(git -C /tmp/itcs rev-parse --short HEAD) > dist/colorschemes
 ```
 
 1. Asks `https://api.github.com/repos/farsonic/AmiBash/releases/latest`
