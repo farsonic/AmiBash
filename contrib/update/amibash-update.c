@@ -7,7 +7,7 @@
  *                             Presets page) into ENVARC:AmiBash/colorschemes
  *
  * It asks GitHub's API for the latest release of farsonic/AmiBash (or
- * REPO=owner/name), compares its tag (v0.2) with the version in C:bash's
+ * REPO=owner/name), compares its tag (v0.3) with the version in C:bash's
  * $VER string, and with INSTALL downloads the release's AmiBash*.lha to
  * T:, unpacks it with LhA and runs Install-AmiBash with the Installer.
  * FORCE installs even when C:bash is up to date. CAFILE=file adds
@@ -32,8 +32,8 @@
 #include <libraries/amissl.h>
 #include <dos/dostags.h>
 
-#define VERSION "0.2"
-static const char ver[] = "$VER: amibash-update " VERSION " (23.10.2026)";
+#define VERSION "0.3"
+static const char ver[] = "$VER: amibash-update " VERSION " (18.11.2026)";
 const char stack_size[] = "$STACK:32768";
 
 struct Library *AmiSSLMasterBase, *AmiSSLBase, *AmiSSLExtBase, *SocketBase;

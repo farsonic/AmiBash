@@ -20,7 +20,7 @@ python3 tools/itermcolors.py /tmp/itcs/schemes $(git -C /tmp/itcs rev-parse --sh
 ```
 
 1. Asks `https://api.github.com/repos/farsonic/AmiBash/releases/latest`
-   (`REPO=` for another) for the latest release: its tag (`v0.2`), date,
+   (`REPO=` for another) for the latest release: its tag (`v0.3`), date,
    notes and files.
 2. Reads the installed version from `C:bash`'s `$VER` string (`BASH=` for
    another file) and compares the two. Return code 0: up to date,
@@ -38,8 +38,8 @@ for networks that inspect HTTPS.
 
 ## Publishing a release
 
-The tag is the version, with a `v`: `v0.2` for `AMIBASH_SHORTVER "0.2"` in
-`src/sh.h`. Attach the archive as `AmiBash-0.2.lha` (any name starting with
+The tag is the version, with a `v`: `v0.3` for `AMIBASH_SHORTVER "0.3"` in
+`src/sh.h`. Attach the archive as `AmiBash-0.3.lha` (any name starting with
 `AmiBash` and ending in `.lha`; `dist/make_release.sh` writes
 `dist/AmiBash.lha`).
 

@@ -16,8 +16,8 @@
 /* the GNU bash release AmiBash follows (UPSTREAM_BASH, tools/bash-upstream.sh);
  * BASH_VERSINFO is taken from it */
 #define AMIBASH_VERSION "5.3.20(1)-amiga"
-#define AMIBASH_SHORTVER "0.2"
-#define AMIBASH_DATE "23.10.2026"
+#define AMIBASH_SHORTVER "0.3"
+#define AMIBASH_DATE "18.11.2026"
 #define AMIBASH_STR2(x) #x
 #define AMIBASH_STR(x) AMIBASH_STR2(x)
 #ifdef AMIBASH_CPU
