@@ -5,8 +5,8 @@
 #   make          fetch and check OpenSSH, patch it, build ssh and ssh-keygen
 #   make clean
 
-OPENSSH := openssh-10.6p1
-SHA256  := a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
+OPENSSH := openssh-10.6p2
+SHA256  := 9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b
 URL     := https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/$(OPENSSH).tar.gz
 AMIGCC  ?= /home/user/toolchain/amiga
 export AMIGCC

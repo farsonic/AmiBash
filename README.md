@@ -341,7 +341,7 @@ See `contrib/update/README.md`.
 
 ## ssh
 
-The archive's `SSH` drawer has **ssh** and **ssh-keygen** from OpenSSH 10.6p1,
+The archive's `SSH` drawer has **ssh** and **ssh-keygen** from OpenSSH 10.6p2,
 the client and key generator, for a 68020 or better with a TCP/IP stack
 (Roadshow, AmiTCP, Miami or Genesis). Next to them is **ssh-copy-id**, a bash
 script run by AmiBash that puts your public key on a server. The OpenSSH
@@ -372,7 +372,7 @@ made without `/dev/urandom` and how to build it.
 
 ## Vim
 
-The archive's `Vim` drawer has **Vim 9.2** (patch 1252, the "huge" build,
+The archive's `Vim` drawer has **Vim 9.2** (patch 1364, the "huge" build,
 68020+) and its runtime files. The Installer puts `vim` in `C:` and the
 runtime files in `VIM:`. An existing `VIM:` from the Aminet Vim is updated;
 otherwise the Installer makes a `Vim` drawer where you choose and assigns

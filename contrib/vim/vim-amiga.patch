@@ -415,10 +415,10 @@ index 8651dd6..29a9497 100644
 +char_u *mch_get_cmd_output_direct(char **argv, char_u *infile, int flags, int *ret_len);
  // vim: ft=c
 diff --git a/src/term.c b/src/term.c
-index bd1b411..18bf489 100644
+index 52efae1..fd41df5 100644
 --- a/src/term.c
 +++ b/src/term.c
-@@ -2396,6 +2396,21 @@ set_termname(char_u *term)
+@@ -2407,6 +2407,21 @@ set_termname(char_u *term)
  	term_console = TRUE;
  # ifdef AMIGA
  	win_resize_on();	// enable window resizing reports
@@ -440,8 +440,31 @@ index bd1b411..18bf489 100644
  # endif
      }
  #endif
+diff --git a/src/ui.c b/src/ui.c
+index 1616ecf..8bb7ec8 100644
+--- a/src/ui.c
++++ b/src/ui.c
+@@ -63,6 +63,10 @@ ui_write(char_u *s, int len, int console UNUSED)
+ #endif
+ }
+ 
++// true while inside ui_breakcheck_force() (used on all systems, not only
++// those below)
++static bool breakcheck_recursive = false;
++
+ #if defined(UNIX) || defined(VMS) || defined(MSWIN)
+ /*
+  * When executing an external program, there may be some typed characters that
+@@ -72,7 +76,6 @@ ui_write(char_u *s, int len, int console UNUSED)
+ static char_u *ta_str = NULL;
+ static int ta_off;	// offset for next char to use when ta_str != NULL
+ static int ta_len;	// length of ta_str when it's not NULL
+-static bool breakcheck_recursive = false;	// true while inside ui_breakcheck_force()
+ 
+     void
+ ui_inchar_undo(char_u *s, int len)
 diff --git a/src/vim9cmds.c b/src/vim9cmds.c
-index aa13bc6..20943ce 100644
+index fae7d03..da31856 100644
 --- a/src/vim9cmds.c
 +++ b/src/vim9cmds.c
 @@ -386,7 +386,13 @@ compile_fill_jump_to_end(endlabel_T **el, int jump_where, cctx_T *cctx)

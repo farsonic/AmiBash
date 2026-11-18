@@ -1,6 +1,6 @@
 # ssh and ssh-keygen for AmigaOS
 
-OpenSSH 10.6p1 (portable), the client and the key generator, for
+OpenSSH 10.6p2 (portable), the client and the key generator, for
 AmigaOS 3.x on a 68020 or better. It is built without OpenSSL, using
 OpenSSH's own algorithms:
 

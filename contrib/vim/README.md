@@ -1,6 +1,6 @@
 # Vim for AmigaOS
 
-Vim 9.2 (patch 1252) for AmigaOS 3.x on a 68020 or better. It's the "huge"
+Vim 9.2 (patch 1364) for AmigaOS 3.x on a 68020 or better. It's the "huge"
 build, without the GUI, built from Vim's own Amiga port with a few changes.
 
 ## In the AmiBash Terminal
@@ -106,6 +106,9 @@ What `vim-amiga.patch` changes:
   window reports and resize events; converted, it became two bytes and the
   cursor keys inserted `<9b>A` as text.
 * **`optiondefs.h`:** `regexpengine` defaults to 1 on the Amiga.
+* **`ui.c`:** `breakcheck_recursive` is declared for all systems. Since
+  9.2.13xx it was declared only for Unix, VMS and Windows but used on all,
+  so Vim did not compile for the Amiga.
 * **`vim9cmds.c`:** the end of a compiled `while` loop is stored where
   `ISN_WHILE` keeps it. Vim wrote it through the `ISN_JUMP` member of the
   union, which only overlaps where an `int` is 4-byte aligned. On the 68k

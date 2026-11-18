@@ -48,7 +48,7 @@ GitHub for a newer AmiBash release; "amibash-update INSTALL" downloads
 it and starts its installer.  In the terminal: AmiBash > Check for
 Update (Amiga-U); AmiBash > About AmiBash shows the version.
 
-The SSH drawer has ssh and ssh-keygen from OpenSSH 10.6p1 (no OpenSSL:
+The SSH drawer has ssh and ssh-keygen from OpenSSH 10.6p2 (no OpenSSL:
 ed25519 keys, curve25519 and post-quantum key exchange, ChaCha20 and
 AES), for a 68020 or better with a TCP/IP stack (Roadshow, AmiTCP, Miami
 or Genesis), and an ssh-copy-id script for AmiBash that puts your key

@@ -13,8 +13,8 @@
 # $(VIM_GIT) $(VIM_TAG)^{}), make clean all, and refresh the patch if it no
 # longer applies.
 
-VIM_TAG    := v9.2.1252
-VIM_COMMIT := 90d3806e3986da398373a5720b57bf2df9d0b690
+VIM_TAG    := v9.2.1364
+VIM_COMMIT := 1889c2f1a011b9572d65f20d84e316262de70dca
 VIM_GIT    := https://github.com/vim/vim.git
 AMIGCC     ?= /home/user/toolchain/amiga
 SRC        := vim-src
